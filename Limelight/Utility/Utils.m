@@ -13,7 +13,23 @@
 #include <netdb.h>
 
 @implementation Utils
-NSString *const deviceName = @"roth";
+
++ (NSString*) deviceName {
+    static NSString* name;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSString* localizedName = [NSHost currentHost].localizedName;
+        if (localizedName.length == 0) {
+            localizedName = @"Mac";
+        }
+        NSArray* parts = [localizedName componentsSeparatedByCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        NSString* stripped = [parts componentsJoinedByString:@""];
+        // Only RFC 3986 unreserved characters pass through, so '&', '=' and '+' can't break the query
+        NSCharacterSet* unreserved = [NSCharacterSet characterSetWithCharactersInString:@"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"];
+        name = [stripped stringByAddingPercentEncodingWithAllowedCharacters:unreserved];
+    });
+    return name;
+}
 
 + (NSData*) randomBytes:(NSInteger)length {
     char* bytes = malloc(length);

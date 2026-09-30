@@ -452,7 +452,10 @@
     
     streamConfig.host = self.app.host.activeAddress;
     streamConfig.appID = self.app.id;
+    streamConfig.appUUID = self.app.uuid;
     streamConfig.appName = self.app.name;
+    streamConfig.useVirtualDisplay = self.useVirtualDisplay;
+    streamConfig.resolutionScaleFactor = (int)[SettingsClass resolutionScaleFor:self.app.host.uuid];
     streamConfig.serverCert = self.app.host.serverCert;
     
     DataManager* dataMan = [[DataManager alloc] init];

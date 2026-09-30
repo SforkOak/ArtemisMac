@@ -14,6 +14,8 @@
 @property (nullable, nonatomic, retain) NSString *id;
 @property (nullable, nonatomic, retain) NSString *name;
 @property (nullable, nonatomic, retain) NSString *installPath;
+// Apollo's app UUID from the app list. Transient: refreshed whenever the app list is fetched.
+@property (nullable, nonatomic, retain) NSString *uuid;
 @property (nonatomic)                   BOOL hdrSupported;
 @property (nonatomic)                   BOOL hidden;
 @property (nonatomic)                   BOOL pinned;

@@ -156,6 +156,27 @@ class SettingsModel: ObservableObject {
         }
     }
 
+    @Published var useVirtualDisplay: Bool {
+        didSet {
+            saveSettings()
+        }
+    }
+    @Published var resolutionScale: Int {
+        didSet {
+            saveSettings()
+        }
+    }
+    @Published var wifiKeepalive: Bool {
+        didSet {
+            saveSettings()
+        }
+    }
+    @Published var clipboardSync: Bool {
+        didSet {
+            saveSettings()
+        }
+    }
+
     static var resolutions: [CGSize] = [CGSizeMake(1280, 720), CGSizeMake(1920, 1080), CGSizeMake(2560, 1440), CGSizeMake(3840, 2160), .zero]
     static var fpss: [Int] = [30, 60, 90, 120, 144, .zero]
     static var bitrateSteps: [Float] = [
@@ -226,7 +247,12 @@ class SettingsModel: ObservableObject {
     static let defaultAppArtworkWidth: CGFloat? = nil
     static let defaultAppArtworkHeight: CGFloat? = nil
     static let defaultDimNonHoveredArtwork = true
-    
+    static let defaultUseVirtualDisplay = false
+    static let defaultResolutionScale = 100
+    static let resolutionScaleRange = 20...200
+    static let defaultWifiKeepalive = true
+    static let defaultClipboardSync = true
+
     init() {
         if let hosts = Self.hosts {
             if let selectedProfile = UserDefaults.standard.string(forKey: "selectedSettingsProfile") {
@@ -273,8 +299,13 @@ class SettingsModel: ObservableObject {
         appArtworkWidth = Self.defaultAppArtworkWidth
         appArtworkHeight = Self.defaultAppArtworkHeight
         dimNonHoveredArtwork = Self.defaultDimNonHoveredArtwork
+
+        useVirtualDisplay = Self.defaultUseVirtualDisplay
+        resolutionScale = Self.defaultResolutionScale
+        wifiKeepalive = Self.defaultWifiKeepalive
+        clipboardSync = Self.defaultClipboardSync
     }
-    
+
     func loadDefaultSettings() {
         selectedResolution = Self.defaultResolution
         customResWidth = Self.defaultCustomResWidth
@@ -305,8 +336,13 @@ class SettingsModel: ObservableObject {
         appArtworkWidth = Self.defaultAppArtworkWidth
         appArtworkHeight = Self.defaultAppArtworkHeight
         dimNonHoveredArtwork = Self.defaultDimNonHoveredArtwork
+
+        useVirtualDisplay = Self.defaultUseVirtualDisplay
+        resolutionScale = Self.defaultResolutionScale
+        wifiKeepalive = Self.defaultWifiKeepalive
+        clipboardSync = Self.defaultClipboardSync
     }
-    
+
     func loadAndSaveDefaultSettings() {
         loadDefaultSettings()
         saveSettings()
@@ -367,7 +403,12 @@ class SettingsModel: ObservableObject {
                 appArtworkHeight = appArtworkDimensions != nil ? appArtworkDimensions!.height : nil
 
                 dimNonHoveredArtwork = settings.dimNonHoveredArtwork
-                
+
+                useVirtualDisplay = settings.useVirtualDisplay ?? Self.defaultUseVirtualDisplay
+                resolutionScale = settings.resolutionScale ?? Self.defaultResolutionScale
+                wifiKeepalive = settings.wifiKeepalive ?? Self.defaultWifiKeepalive
+                clipboardSync = settings.clipboardSync ?? Self.defaultClipboardSync
+
                 func loadNillableDimensionSetting(inputDimensions: CGSize?) -> CGSize? {
                     let finalSize: CGSize?
                     
@@ -446,7 +487,11 @@ class SettingsModel: ObservableObject {
             mouseDriver: mouseDriver,
             emulateGuide: emulateGuide,
             appArtworkDimensions: appArtworkDimensions,
-            dimNonHoveredArtwork: dimNonHoveredArtwork
+            dimNonHoveredArtwork: dimNonHoveredArtwork,
+            useVirtualDisplay: useVirtualDisplay,
+            resolutionScale: min(max(resolutionScale, Self.resolutionScaleRange.lowerBound), Self.resolutionScaleRange.upperBound),
+            wifiKeepalive: wifiKeepalive,
+            clipboardSync: clipboardSync
         )
         
         if let data = try? PropertyListEncoder().encode(settings) {

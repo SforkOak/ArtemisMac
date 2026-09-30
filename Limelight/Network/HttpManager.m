@@ -51,10 +51,11 @@ static const NSString* HTTPS_PORT = @"47984";
 
 - (id) initWithHost:(NSString*) host uniqueId:(NSString*) uniqueId serverCert:(NSData*) serverCert {
     self = [super init];
-    // Use the same UID for all Moonlight clients to allow them
-    // quit games started on another Moonlight client.
-    _uniqueId = @"0123456789ABCDEF";
-    _deviceName = deviceName;
+    // Apollo tracks clients (names, permissions, per-client sessions) by
+    // their unique ID, so send our real per-install ID rather than the
+    // shared ID stock Moonlight uses.
+    _uniqueId = uniqueId;
+    _deviceName = [Utils deviceName];
     _serverCert = serverCert;
     _requestLock = dispatch_semaphore_create(0);
     _respData = [[NSMutableData alloc] init];
@@ -160,7 +161,7 @@ static const NSString* HTTPS_PORT = @"47984";
 }
 
 - (NSURLRequest*) newUnpairRequest {
-    NSString* urlString = [NSString stringWithFormat:@"%@/unpair?uniqueid=%@", _baseHTTPURL, _uniqueId];
+    NSString* urlString = [NSString stringWithFormat:@"%@/unpair?uniqueid=%@&devicename=%@", _baseHTTPURL, _uniqueId, _deviceName];
     return [self createRequestFromString:urlString timeout:NORMAL_TIMEOUT_SEC];
 }
 
@@ -187,7 +188,7 @@ static const NSString* HTTPS_PORT = @"47984";
 }
 
 - (NSURLRequest *)newAppListRequest {
-    NSString* urlString = [NSString stringWithFormat:@"%@/applist?uniqueid=%@", _baseHTTPSURL, _uniqueId];
+    NSString* urlString = [NSString stringWithFormat:@"%@/applist?uniqueid=%@&devicename=%@", _baseHTTPSURL, _uniqueId, _deviceName];
     return [self createRequestFromString:urlString timeout:NORMAL_TIMEOUT_SEC];
 }
 
@@ -197,7 +198,7 @@ static const NSString* HTTPS_PORT = @"47984";
         return [self newHttpServerInfoRequest:fastFail];
     }
     
-    NSString* urlString = [NSString stringWithFormat:@"%@/serverinfo?uniqueid=%@", _baseHTTPSURL, _uniqueId];
+    NSString* urlString = [NSString stringWithFormat:@"%@/serverinfo?uniqueid=%@&devicename=%@", _baseHTTPSURL, _uniqueId, _deviceName];
     return [self createRequestFromString:urlString timeout:(fastFail ? SHORT_TIMEOUT_SEC : NORMAL_TIMEOUT_SEC)];
 }
 
@@ -218,10 +219,15 @@ static const NSString* HTTPS_PORT = @"47984";
     // indicated by a negative version in the last field.
     int fps = (config.frameRate > 60 && ![config.appVersion containsString:@".-"]) ? 0 : config.frameRate;
 
-    NSString* urlString = [NSString stringWithFormat:@"%@/%@?uniqueid=%@&appid=%@&mode=%dx%dx%d&additionalStates=1&sops=%d&rikey=%@&rikeyid=%d%@&localAudioPlayMode=%d&surroundAudioInfo=%d&remoteControllersBitmap=%d&gcmap=%d&gcpersist=%d%s",
-                           _baseHTTPSURL, verb, _uniqueId,
-                           config.appID,
+    // Apollo launches by app UUID when it has one and falls back to appid otherwise
+    NSString* appUuidParam = config.appUUID.length > 0 ? [NSString stringWithFormat:@"&appuuid=%@", config.appUUID] : @"";
+
+    NSString* urlString = [NSString stringWithFormat:@"%@/%@?uniqueid=%@&devicename=%@&appid=%@%@&mode=%dx%dx%d&scaleFactor=%d&virtualDisplay=%d&additionalStates=1&sops=%d&rikey=%@&rikeyid=%d%@&localAudioPlayMode=%d&surroundAudioInfo=%d&remoteControllersBitmap=%d&gcmap=%d&gcpersist=%d%s",
+                           _baseHTTPSURL, verb, _uniqueId, _deviceName,
+                           config.appID, appUuidParam,
                            config.width, config.height, fps,
+                           config.resolutionScaleFactor > 0 ? config.resolutionScaleFactor : 100,
+                           config.useVirtualDisplay ? 1 : 0,
                            config.optimizeGameSettings ? 1 : 0,
                            [Utils bytesToHex:config.riKey], config.riKeyId,
                            (config.supportedVideoFormats & VIDEO_FORMAT_MASK_10BIT) ? @"&hdrMode=1&clientHdrCapVersion=0&clientHdrCapSupportedFlagsInUint32=0&clientHdrCapMetaDataId=NV_STATIC_METADATA_TYPE_1&clientHdrCapDisplayData=0x0x0x0x0x0x0x0x0x0x0": @"",
@@ -243,12 +249,12 @@ static const NSString* HTTPS_PORT = @"47984";
 }
 
 - (NSURLRequest*) newQuitAppRequest {
-    NSString* urlString = [NSString stringWithFormat:@"%@/cancel?uniqueid=%@", _baseHTTPSURL, _uniqueId];
+    NSString* urlString = [NSString stringWithFormat:@"%@/cancel?uniqueid=%@&devicename=%@", _baseHTTPSURL, _uniqueId, _deviceName];
     return [self createRequestFromString:urlString timeout:LONG_TIMEOUT_SEC];
 }
 
 - (NSURLRequest*) newAppAssetRequestWithAppId:(NSString *)appId {
-    NSString* urlString = [NSString stringWithFormat:@"%@/appasset?uniqueid=%@&appid=%@&AssetType=2&AssetIdx=0", _baseHTTPSURL, _uniqueId, appId];
+    NSString* urlString = [NSString stringWithFormat:@"%@/appasset?uniqueid=%@&devicename=%@&appid=%@&AssetType=2&AssetIdx=0", _baseHTTPSURL, _uniqueId, _deviceName, appId];
     return [self createRequestFromString:urlString timeout:NORMAL_TIMEOUT_SEC];
 }
 

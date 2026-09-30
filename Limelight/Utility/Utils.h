@@ -20,8 +20,9 @@ typedef NS_ENUM(int, State) {
     StateOnline
 };
 
-FOUNDATION_EXPORT NSString *const deviceName;
-
+// This Mac's name with whitespace stripped, percent-encoded for use in a URL query.
+// Apollo shows it in its client list.
++ (NSString*) deviceName;
 + (NSData*) randomBytes:(NSInteger)length;
 + (NSString*) bytesToHex:(NSData*)data;
 + (NSData*) hexToBytes:(NSString*) hex;

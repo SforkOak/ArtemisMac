@@ -12,6 +12,7 @@
 
 @implementation HttpResponse {
     NSMutableDictionary* _elements;
+    NSMutableDictionary<NSString*, NSMutableArray<NSString*>*>* _elementLists;
 }
 @synthesize data, statusCode, statusMessage;
 
@@ -22,6 +23,11 @@
 
 - (NSString*) getStringTag:(NSString*)tag {
     return [_elements objectForKey:tag];
+}
+
+- (NSArray<NSString*>*) getStringArrayTag:(NSString*)tag {
+    NSArray<NSString*>* values = [_elementLists objectForKey:tag];
+    return values != nil ? [values copy] : @[];
 }
 
 - (BOOL) getIntTag:(NSString *)tag value:(NSInteger*)value {
@@ -40,6 +46,7 @@
 
 - (void) parseData {
     _elements = [[NSMutableDictionary alloc] init];
+    _elementLists = [[NSMutableDictionary alloc] init];
     xmlDocPtr docPtr = xmlParseMemory([self.data bytes], (int)[self.data length]);
     if (docPtr == NULL) {
         Log(LOG_W, @"An error occured trying to parse xml.");
@@ -84,6 +91,14 @@
         }
         NSString* key = [[NSString alloc] initWithCString:(const char*)node->name encoding:NSUTF8StringEncoding];
         [_elements setObject:value forKey:key];
+        if (node->type == XML_ELEMENT_NODE) {
+            NSMutableArray<NSString*>* list = [_elementLists objectForKey:key];
+            if (list == nil) {
+                list = [[NSMutableArray alloc] init];
+                [_elementLists setObject:list forKey:key];
+            }
+            [list addObject:value];
+        }
         xmlFree(nodeVal);
         node = node->next;
     }

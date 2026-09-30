@@ -12,6 +12,7 @@ enum SettingsPaneType: Int, CaseIterable {
     case stream
     case videoAndAudio
     case input
+    case apollo
     case app
     case legacy
 
@@ -21,16 +22,18 @@ enum SettingsPaneType: Int, CaseIterable {
             return "Stream"
         case .videoAndAudio:
             return "Video and Audio"
-            
+
         case .input:
             return "Input"
+        case .apollo:
+            return "Apollo"
         case .app:
             return "App"
         case .legacy:
             return "Legacy"
         }
     }
-    
+
     var symbol: String {
         switch self {
         case .stream:
@@ -39,13 +42,15 @@ enum SettingsPaneType: Int, CaseIterable {
             return "video.fill"
         case .input:
             return "keyboard.fill"
+        case .apollo:
+            return "sun.max.fill"
         case .app:
             return "appclip"
         case .legacy:
             return "archivebox.fill"
         }
     }
-    
+
     var color: Color {
         switch self {
         case .stream:
@@ -54,6 +59,8 @@ enum SettingsPaneType: Int, CaseIterable {
             return .orange
         case .input:
             return .purple
+        case .apollo:
+            return .yellow
         case .app:
             return .pink
         case .legacy:
@@ -130,6 +137,10 @@ struct Detail: View {
             case .input:
                 SettingPaneLoader(settingsModel) {
                     InputView()
+                }
+            case .apollo:
+                SettingPaneLoader(settingsModel) {
+                    ApolloView()
                 }
             case .app:
                 SettingPaneLoader(settingsModel) {
@@ -414,6 +425,55 @@ struct InputView: View {
                             }
                         }
                     })
+                }
+            }
+            .padding()
+        }
+    }
+}
+
+struct ApolloView: View {
+    @EnvironmentObject private var settingsModel: SettingsModel
+
+    var body: some View {
+        ScrollView {
+            VStack {
+                FormSection(title: "Virtual Display") {
+                    ToggleCell(title: "Launch Apps in a Virtual Display", boolBinding: $settingsModel.useVirtualDisplay)
+
+                    Divider()
+
+                    VStack(alignment: .leading) {
+                        HStack {
+                            Text("Virtual Display Scale")
+                            Spacer()
+                            Text("\(settingsModel.resolutionScale)%")
+                                .availableMonospacedDigit()
+                        }
+                        Slider(value: Binding(get: {
+                            Double(settingsModel.resolutionScale)
+                        }, set: { newValue in
+                            settingsModel.resolutionScale = Int(newValue)
+                        }), in: Double(SettingsModel.resolutionScaleRange.lowerBound)...Double(SettingsModel.resolutionScaleRange.upperBound), step: 5)
+                        Text("Scales the host's virtual display size. The stream resolution doesn't change.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                Spacer()
+                    .frame(height: 32)
+
+                FormSection(title: "Session") {
+                    ToggleCell(title: "Sync Clipboard", boolBinding: $settingsModel.clipboardSync)
+
+                    Divider()
+
+                    ToggleCell(title: "Keep Wi-Fi Awake", boolBinding: $settingsModel.wifiKeepalive)
+                    Text("Sends a tiny packet every 20 ms so the Wi-Fi radio doesn't sleep between frames. Reduces latency spikes on Wi-Fi.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .padding()

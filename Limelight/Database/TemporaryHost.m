@@ -17,8 +17,14 @@
     self.appList = [[NSMutableSet alloc] init];
     self.currentGame = @"0";
     self.state = StateUnknown;
-    
+    self.permission = -1;
+    self.serverCommands = @[];
+
     return self;
+}
+
+- (BOOL) isApollo {
+    return self.permission >= 0 || self.virtualDisplayCapable;
 }
 
 - (id) initFromHost:(Host*)host {

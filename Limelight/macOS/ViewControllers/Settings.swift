@@ -31,7 +31,13 @@ struct Settings: Encodable, Decodable {
     let emulateGuide: Bool
     let appArtworkDimensions: CGSize?
     let dimNonHoveredArtwork: Bool
-    
+
+    // Apollo settings. Optional so profiles saved before they existed still decode.
+    let useVirtualDisplay: Bool?
+    let resolutionScale: Int?
+    let wifiKeepalive: Bool?
+    let clipboardSync: Bool?
+
     static func getSettings(for key: String) -> Self? {
         if let data = UserDefaults.standard.data(forKey: SettingsClass.profileKey(for: key) ) {
             if let settings = (try? PropertyListDecoder().decode(Settings.self, from: data)) ?? nil {
@@ -183,7 +189,23 @@ class SettingsClass: NSObject {
         if let settings = Settings.getSettings(for: key) {
             return settings.volumeLevel ?? SettingsModel.defaultVolumeLevel
         }
-        
+
         return SettingsModel.defaultVolumeLevel
+    }
+
+    @objc static func useVirtualDisplay(for key: String) -> Bool {
+        Settings.getSettings(for: key)?.useVirtualDisplay ?? SettingsModel.defaultUseVirtualDisplay
+    }
+
+    @objc static func resolutionScale(for key: String) -> Int {
+        Settings.getSettings(for: key)?.resolutionScale ?? SettingsModel.defaultResolutionScale
+    }
+
+    @objc static func wifiKeepalive(for key: String) -> Bool {
+        Settings.getSettings(for: key)?.wifiKeepalive ?? SettingsModel.defaultWifiKeepalive
+    }
+
+    @objc static func clipboardSync(for key: String) -> Bool {
+        Settings.getSettings(for: key)?.clipboardSync ?? SettingsModel.defaultClipboardSync
     }
 }

@@ -50,6 +50,9 @@
 
 @property (nonatomic, strong) TemporaryApp *currentlyHoveredApp;
 
+// Whether the next stream launched from here asks Apollo for a virtual display
+@property (nonatomic) BOOL launchInVirtualDisplay;
+
 @end
 
 const CGFloat scaleBase = 1.125;
@@ -134,6 +137,7 @@ const CGFloat scaleBase = 1.125;
     StreamViewController *streamVC = segue.destinationController;
     streamVC.app = self.runningApp;
     streamVC.delegate = self;
+    streamVC.useVirtualDisplay = self.launchInVirtualDisplay;
 }
 
 
@@ -323,6 +327,27 @@ const CGFloat scaleBase = 1.125;
 #pragma mark - AppsViewControllerDelegate
 
 - (void)openApp:(TemporaryApp *)app {
+    [self openApp:app useVirtualDisplay:[self defaultUseVirtualDisplayForApp:app]];
+}
+
+- (BOOL)defaultUseVirtualDisplayForApp:(TemporaryApp *)app {
+    return app.host.virtualDisplayCapable && [SettingsClass useVirtualDisplayFor:app.host.uuid];
+}
+
+- (void)openApp:(TemporaryApp *)app useVirtualDisplay:(BOOL)useVirtualDisplay {
+    if (useVirtualDisplay && !app.host.virtualDisplayDriverReady) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.alertStyle = NSAlertStyleWarning;
+        alert.messageText = @"Virtual display isn't ready";
+        alert.informativeText = [NSString stringWithFormat:@"Apollo on %@ reports that its virtual display driver isn't ready, so the app may open on the host's physical display instead.", app.host.name];
+        [alert addButtonWithTitle:@"Launch Anyway"];
+        [alert addButtonWithTitle:@"Cancel"];
+        if ([alert runModal] != NSAlertFirstButtonReturn) {
+            return;
+        }
+    }
+    self.launchInVirtualDisplay = useVirtualDisplay;
+
     if (self.runningApp != nil && app != self.runningApp) {
         if ([self askWhetherToStopRunningApp:self.runningApp andStartNewApp:app]) {
             [self quitApp:self.runningApp completion:^(BOOL success) {
@@ -403,6 +428,27 @@ const CGFloat scaleBase = 1.125;
     quitAppMenuItem.image = [NSImage imageWithSystemSymbolName:@"xmark.circle" accessibilityDescription:nil];
     if (self.runningApp == nil || app != self.runningApp) {
         quitAppMenuItem.hidden = YES;
+    }
+
+    // Apollo: offer launching on whichever display the default doesn't use
+    NSMenuItem *displayLaunchMenuItem = [HostsViewController getMenuItemForIdentifier:@"alternateDisplayLaunchMenuItem" inMenu:menu];
+    if (displayLaunchMenuItem == nil) {
+        displayLaunchMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:@selector(alternateDisplayLaunchMenuItemClicked:) keyEquivalent:@""];
+        displayLaunchMenuItem.identifier = @"alternateDisplayLaunchMenuItem";
+        displayLaunchMenuItem.target = self;
+        [menu insertItem:displayLaunchMenuItem atIndex:0];
+    }
+    BOOL virtualByDefault = [self defaultUseVirtualDisplayForApp:app];
+    displayLaunchMenuItem.title = virtualByDefault ? @"Launch on Host Display" : @"Launch in Virtual Display";
+    displayLaunchMenuItem.image = [NSImage imageWithSystemSymbolName:virtualByDefault ? @"display" : @"rectangle.dashed" accessibilityDescription:nil];
+    displayLaunchMenuItem.representedObject = app;
+    displayLaunchMenuItem.hidden = !app.host.virtualDisplayCapable;
+}
+
+- (IBAction)alternateDisplayLaunchMenuItemClicked:(NSMenuItem *)item {
+    TemporaryApp *app = item.representedObject;
+    if (app != nil) {
+        [self openApp:app useVirtualDisplay:![self defaultUseVirtualDisplayForApp:app]];
     }
 }
 
@@ -733,6 +779,7 @@ static const CGFloat runningAnimationDuration = 1.0;
         for (TemporaryApp* savedApp in newHostAppList) {
             if ([app.id isEqualToString:savedApp.id]) {
                 savedApp.name = app.name;
+                savedApp.uuid = app.uuid;
                 appAlreadyInList = YES;
                 break;
             }

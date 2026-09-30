@@ -55,6 +55,19 @@
     if (serverCodecModeString != nil) {
         host.serverCodecModeSupport = [[serverCodecModeString trim] intValue];
     }
+
+    // Apollo extensions. Apollo only reports real values to a paired client over HTTPS.
+    NSString *permissionString = [[self getStringTag:@"Permission"] trim];
+    host.permission = permissionString.length > 0 ? (int)[permissionString longLongValue] : -1;
+    host.virtualDisplayCapable = [[[self getStringTag:@"VirtualDisplayCapable"] trim] isEqualToString:@"true"];
+    host.virtualDisplayDriverReady = host.virtualDisplayCapable &&
+        [[[self getStringTag:@"VirtualDisplayDriverReady"] trim] isEqualToString:@"true"];
+
+    NSMutableArray<NSString*> *serverCommands = [[NSMutableArray alloc] init];
+    for (NSString *command in [self getStringArrayTag:@"ServerCommand"]) {
+        [serverCommands addObject:[command trim]];
+    }
+    host.serverCommands = serverCommands;
 }
 
 @end

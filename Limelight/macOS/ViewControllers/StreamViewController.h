@@ -24,6 +24,8 @@ struct Resolution {
 @interface StreamViewController : NSViewController
 @property (nonatomic, strong) TemporaryApp *app;
 @property (nonatomic, weak) id<AppsViewControllerDelegate> delegate;
+// Ask Apollo to stream from a virtual display sized to this client
+@property (nonatomic) BOOL useVirtualDisplay;
 
 + (struct Resolution)getResolution;
 @end

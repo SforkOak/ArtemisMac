@@ -24,6 +24,8 @@ static NSString* TAG_STATUS_MESSAGE = @"status_message";
 - (void) populateWithData:(NSData*)data;
 - (void) parseData;
 - (NSString*) getStringTag:(NSString*)tag;
+// Every value of a tag that can appear more than once (e.g. Apollo's ServerCommand), in document order
+- (NSArray<NSString*>*) getStringArrayTag:(NSString*)tag;
 - (BOOL) getIntTag:(NSString *)tag value:(NSInteger*)value;
 - (BOOL) isStatusOk;
 

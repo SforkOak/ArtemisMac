@@ -9,6 +9,23 @@
 #import "Utils.h"
 #import "Host+CoreDataClass.h"
 
+// Apollo client permission bits (crypto::PERM in Apollo's src/crypto.h)
+typedef NS_OPTIONS(uint32_t, ApolloPermission) {
+    ApolloPermissionInputController = 1 << 8,
+    ApolloPermissionInputTouch      = 1 << 9,
+    ApolloPermissionInputPen        = 1 << 10,
+    ApolloPermissionInputMouse      = 1 << 11,
+    ApolloPermissionInputKeyboard   = 1 << 12,
+    ApolloPermissionClipboardSet    = 1 << 16,
+    ApolloPermissionClipboardRead   = 1 << 17,
+    ApolloPermissionFileUpload      = 1 << 18,
+    ApolloPermissionFileDownload    = 1 << 19,
+    ApolloPermissionServerCommand   = 1 << 20,
+    ApolloPermissionListApps        = 1 << 24,
+    ApolloPermissionViewStreams     = 1 << 25,
+    ApolloPermissionLaunchApps      = 1 << 26,
+};
+
 @interface TemporaryHost : NSObject
 
 @property (atomic) State state;
@@ -25,6 +42,16 @@
 @property (atomic, nullable, retain) NSString *ipv6Address;
 @property (atomic, nullable, retain) NSString *mac;
 @property (atomic)                   int serverCodecModeSupport;
+
+// Apollo extensions reported in serverinfo. These are transient and refreshed on every poll.
+// permission is the Apollo permission bitmask (see ApolloPermission), or -1 if the host didn't report one.
+@property (atomic)                   int permission;
+@property (atomic)                   BOOL virtualDisplayCapable;
+@property (atomic)                   BOOL virtualDisplayDriverReady;
+// Names of the host's server commands; a command's index here is its ID for LiSendExecServerCmd()
+@property (atomic, nonnull, retain)  NSArray<NSString*> *serverCommands;
+// YES when the host reports Apollo's extensions, so Apollo-only features can be offered
+@property (atomic, readonly)         BOOL isApollo;
 
 NS_ASSUME_NONNULL_BEGIN
 

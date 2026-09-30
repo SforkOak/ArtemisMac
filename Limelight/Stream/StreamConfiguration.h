@@ -12,7 +12,12 @@
 @property NSString* appVersion;
 @property NSString* gfeVersion;
 @property NSString* appID;
+@property NSString* appUUID;
 @property NSString* appName;
+// Apollo: stream to a virtual display, and scale the virtual display's
+// size by this percentage (20-200; 100 = native).
+@property BOOL useVirtualDisplay;
+@property int resolutionScaleFactor;
 @property NSString* rtspSessionUrl;
 @property int serverCodecModeSupport;
 @property int width;
