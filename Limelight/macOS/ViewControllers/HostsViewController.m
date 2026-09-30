@@ -60,7 +60,7 @@
 - (void)viewWillAppear {
     [super viewWillAppear];
     
-    self.parentViewController.title = @"Moonlight";
+    self.parentViewController.title = @"Artemis";
     self.parentViewController.view.window.subtitle = [Helpers versionNumberString];
 
     [self.parentViewController.view.window moonlight_toolbarItemForAction:@selector(addHostButtonClicked:)].enabled = YES;

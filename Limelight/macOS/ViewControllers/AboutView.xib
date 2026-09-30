@@ -38,7 +38,7 @@
                                     <constraints>
                                         <constraint firstAttribute="width" constant="272" id="T0R-s6-O3u"/>
                                     </constraints>
-                                    <textFieldCell key="cell" lineBreakMode="clipping" alignment="center" title="Moonlight" id="1dj-Bs-JF3">
+                                    <textFieldCell key="cell" lineBreakMode="clipping" alignment="center" title="Artemis" id="1dj-Bs-JF3">
                                         <font key="font" metaFont="systemBold" size="36"/>
                                         <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
                                         <color key="backgroundColor" name="textBackgroundColor" catalog="System" colorSpace="catalog"/>
@@ -65,7 +65,7 @@
                                     <constraints>
                                         <constraint firstAttribute="height" constant="34" id="lnf-aE-ZJd"/>
                                     </constraints>
-                                    <textFieldCell key="cell" truncatesLastVisibleLine="YES" alignment="center" title="Based on original Moonlight iOS project by Moonlight Stream" id="7fE-Pg-Eff">
+                                    <textFieldCell key="cell" truncatesLastVisibleLine="YES" alignment="center" title="Based on Moonlight for macOS, Moonlight iOS and Artemis" id="7fE-Pg-Eff">
                                         <font key="font" metaFont="system"/>
                                         <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
                                         <color key="backgroundColor" name="textBackgroundColor" catalog="System" colorSpace="catalog"/>
