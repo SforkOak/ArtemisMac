@@ -27,6 +27,7 @@
     char _hostString[256];
     char _appVersionString[32];
     char _gfeVersionString[32];
+    char _rtspSessionUrl[128];
 }
 
 static NSLock* initLock;
@@ -80,6 +81,7 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit)
 {
     int offset = 0;
     int ret;
+    unsigned int ptsMs = (unsigned int)(decodeUnit->presentationTimeUs / 1000);
     unsigned char* data = (unsigned char*) malloc(decodeUnit->fullLength);
     if (data == NULL) {
         // A frame was lost due to OOM condition
@@ -94,7 +96,7 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit)
                                         length:entry->length
                                     bufferType:entry->bufferType
                                      frameType:decodeUnit->frameType
-                                           pts:decodeUnit->presentationTimeMs];
+                                           pts:ptsMs];
             if (ret != DR_OK) {
                 free(data);
                 return ret;
@@ -113,7 +115,7 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit)
                                  length:offset
                              bufferType:BUFFER_TYPE_PICDATA
                               frameType:decodeUnit->frameType
-                                    pts:decodeUnit->presentationTimeMs];
+                                    pts:ptsMs];
 }
 
 int ArInit(int audioConfiguration, POPUS_MULTISTREAM_CONFIGURATION originalOpusConfig, void* context, int flags)
@@ -369,14 +371,19 @@ void ClConnectionStatusUpdate(int status)
     
     strncpy(_hostString,
             [config.host cStringUsingEncoding:NSUTF8StringEncoding],
-            sizeof(_hostString));
+            sizeof(_hostString) - 1);
     strncpy(_appVersionString,
             [config.appVersion cStringUsingEncoding:NSUTF8StringEncoding],
-            sizeof(_appVersionString));
+            sizeof(_appVersionString) - 1);
     if (config.gfeVersion != nil) {
         strncpy(_gfeVersionString,
                 [config.gfeVersion cStringUsingEncoding:NSUTF8StringEncoding],
-                sizeof(_gfeVersionString));
+                sizeof(_gfeVersionString) - 1);
+    }
+    if (config.rtspSessionUrl != nil) {
+        strncpy(_rtspSessionUrl,
+                [config.rtspSessionUrl cStringUsingEncoding:NSUTF8StringEncoding],
+                sizeof(_rtspSessionUrl) - 1);
     }
 
     LiInitializeServerInformation(&_serverInfo);
@@ -385,6 +392,10 @@ void ClConnectionStatusUpdate(int status)
     if (config.gfeVersion != nil) {
         _serverInfo.serverInfoGfeVersion = _gfeVersionString;
     }
+    if (config.rtspSessionUrl != nil) {
+        _serverInfo.rtspSessionUrl = _rtspSessionUrl;
+    }
+    _serverInfo.serverCodecModeSupport = config.serverCodecModeSupport;
 
     renderer = myRenderer;
     _callbacks = callbacks;
@@ -394,15 +405,13 @@ void ClConnectionStatusUpdate(int status)
     _streamConfig.height = config.height;
     _streamConfig.fps = config.frameRate;
     _streamConfig.bitrate = config.bitRate;
-    _streamConfig.enableHdr = config.enableHdr;
+    _streamConfig.supportedVideoFormats = config.supportedVideoFormats;
     _streamConfig.audioConfiguration = config.audioConfiguration;
-    _streamConfig.colorSpace = COLORSPACE_REC_709;
-    
-    // Use some of the HEVC encoding efficiency improvements to
-    // reduce bandwidth usage while still gaining some image
-    // quality improvement.
-    _streamConfig.hevcBitratePercentageMultiplier = 75;
-    
+
+    // Every Apple Silicon Mac has ARMv8 crypto instructions, so encrypting
+    // the video and audio streams costs next to nothing.
+    _streamConfig.encryptionFlags = ENCFLG_ALL;
+
     if ([Utils isActiveNetworkVPN]) {
         // Force remote streaming mode when a VPN is connected
         _streamConfig.streamingRemotely = STREAM_CFG_REMOTE;
@@ -413,23 +422,6 @@ void ClConnectionStatusUpdate(int status)
         _streamConfig.streamingRemotely = STREAM_CFG_AUTO;
         _streamConfig.packetSize = 1392;
     }
-    
-    // HDR implies HEVC allowed
-    if (config.enableHdr) {
-        config.allowHevc = YES;
-    }
-
-    // On iOS 11, we can use HEVC if the server supports encoding it
-    // and this device has hardware decode for it (A9 and later).
-    // Additionally, iPhone X had a bug which would cause video
-    // to freeze after a few minutes with HEVC prior to iOS 11.3.
-    // As a result, we will only use HEVC on iOS 11.3 or later.
-    if (@available(iOS 11.3, tvOS 11.3, macOS 10.14, *)) {
-        _streamConfig.supportsHevc = config.allowHevc && VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC);
-    }
-    
-    // HEVC must be supported when HDR is enabled
-    assert(!_streamConfig.enableHdr || _streamConfig.supportsHevc);
 
     memcpy(_streamConfig.remoteInputAesKey, [config.riKey bytes], [config.riKey length]);
     memset(_streamConfig.remoteInputAesIv, 0, 16);

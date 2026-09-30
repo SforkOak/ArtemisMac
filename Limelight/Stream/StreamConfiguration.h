@@ -13,6 +13,8 @@
 @property NSString* gfeVersion;
 @property NSString* appID;
 @property NSString* appName;
+@property NSString* rtspSessionUrl;
+@property int serverCodecModeSupport;
 @property int width;
 @property int height;
 @property int frameRate;
@@ -24,9 +26,8 @@
 @property BOOL optimizeGameSettings;
 @property BOOL playAudioOnPC;
 @property int audioConfiguration;
-@property BOOL enableHdr;
+@property int supportedVideoFormats;
 @property BOOL multiController;
-@property BOOL allowHevc;
 @property NSData* serverCert;
 
 @end

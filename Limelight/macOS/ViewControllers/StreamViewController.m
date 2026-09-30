@@ -465,8 +465,13 @@
     streamConfig.bitRate = [streamSettings.bitrate intValue];
     streamConfig.optimizeGameSettings = streamSettings.optimizeGames;
     streamConfig.playAudioOnPC = streamSettings.playAudioOnPC;
-    streamConfig.allowHevc = streamSettings.useHevc;
-    streamConfig.enableHdr = streamSettings.useHevc && VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC) ? streamSettings.enableHdr : NO;
+    streamConfig.supportedVideoFormats = VIDEO_FORMAT_H264;
+    if (streamSettings.useHevc && VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC)) {
+        streamConfig.supportedVideoFormats |= VIDEO_FORMAT_H265;
+        if (streamSettings.enableHdr) {
+            streamConfig.supportedVideoFormats |= VIDEO_FORMAT_H265_MAIN10;
+        }
+    }
 
     streamConfig.multiController = streamSettings.multiController;
     streamConfig.gamepadMask = self.useSystemControllerDriver ? [ControllerSupport getConnectedGamepadMask:streamConfig] : 1;

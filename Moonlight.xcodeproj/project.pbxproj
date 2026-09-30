@@ -359,6 +359,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				ARCHS = arm64;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.1.0;
 				MTL_ENABLE_DEBUG_INFO = YES;
@@ -409,6 +410,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				ARCHS = arm64;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.1.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
@@ -465,6 +467,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				ARCHS = arm64;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = macosx;
@@ -513,6 +516,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				ARCHS = arm64;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PROVISIONING_PROFILE = "";
 				SDKROOT = macosx;

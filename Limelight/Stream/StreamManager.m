@@ -50,6 +50,7 @@
     NSString* appversion = [serverInfoResp getStringTag:@"appversion"];
     NSString* gfeVersion = [serverInfoResp getStringTag:@"GfeVersion"];
     NSString* serverState = [serverInfoResp getStringTag:@"state"];
+    NSString* codecSupport = [serverInfoResp getStringTag:@"ServerCodecModeSupport"];
     if (![serverInfoResp isStatusOk]) {
         [_callbacks launchFailed:serverInfoResp.statusMessage];
         return;
@@ -65,19 +66,29 @@
         return;
     }
     
+    // Populate the config's version fields from serverinfo. The launch
+    // request needs appVersion to tell GFE and Sunshine apart.
+    _config.appVersion = appversion;
+    _config.gfeVersion = gfeVersion;
+    _config.serverCodecModeSupport = [codecSupport intValue];
+
     // resumeApp and launchApp handle calling launchFailed
+    NSString* sessionUrl;
     if ([serverState hasSuffix:@"_SERVER_BUSY"]) {
         // App already running, resume it
-        if (![self resumeApp:hMan]) {
+        if (![self resumeApp:hMan receiveSessionUrl:&sessionUrl]) {
             return;
         }
     } else {
         // Start app
-        if (![self launchApp:hMan]) {
+        if (![self launchApp:hMan receiveSessionUrl:&sessionUrl]) {
             return;
         }
     }
-    
+
+    // Populate RTSP session URL from launch/resume response
+    _config.rtspSessionUrl = sessionUrl;
+
 #if TARGET_OS_IPHONE
     // Set mouse delta factors from the screen resolution and stream size
     CGFloat screenScale = [[UIScreen mainScreen] scale];
@@ -86,11 +97,7 @@
     [((StreamView*)_renderView) setMouseDeltaFactors:_config.width / screenSize.width
                                                    y:_config.height / screenSize.height];
 #endif
-    
-    // Populate the config's version fields from serverinfo
-    _config.appVersion = appversion;
-    _config.gfeVersion = gfeVersion;
-    
+
     // Initializing the renderer must be done on the main thread
     dispatch_async(dispatch_get_main_queue(), ^{
         VideoDecoderRenderer* renderer = [[VideoDecoderRenderer alloc] initWithView:self->_renderView];
@@ -106,10 +113,11 @@
     _callbacks = nil;
 }
 
-- (BOOL) launchApp:(HttpManager*)hMan {
+- (BOOL) launchApp:(HttpManager*)hMan receiveSessionUrl:(NSString**)sessionUrl {
     HttpResponse* launchResp = [[HttpResponse alloc] init];
     [hMan executeRequestSynchronously:[HttpRequest requestForResponse:launchResp withUrlRequest:[hMan newLaunchRequest:_config]]];
     NSString *gameSession = [launchResp getStringTag:@"gamesession"];
+    *sessionUrl = [launchResp getStringTag:@"sessionUrl0"];
     if (![launchResp isStatusOk]) {
         [_callbacks launchFailed:launchResp.statusMessage];
         Log(LOG_E, @"Failed Launch Response: %@", launchResp.statusMessage);
@@ -123,10 +131,11 @@
     return TRUE;
 }
 
-- (BOOL) resumeApp:(HttpManager*)hMan {
+- (BOOL) resumeApp:(HttpManager*)hMan receiveSessionUrl:(NSString**)sessionUrl {
     HttpResponse* resumeResp = [[HttpResponse alloc] init];
     [hMan executeRequestSynchronously:[HttpRequest requestForResponse:resumeResp withUrlRequest:[hMan newResumeRequest:_config]]];
     NSString* resume = [resumeResp getStringTag:@"resume"];
+    *sessionUrl = [resumeResp getStringTag:@"sessionUrl0"];
     if (![resumeResp isStatusOk]) {
         [_callbacks launchFailed:resumeResp.statusMessage];
         Log(LOG_E, @"Failed Resume Response: %@", resumeResp.statusMessage);

@@ -210,52 +210,36 @@ static const NSString* HTTPS_PORT = @"47984";
     return [self newHttpServerInfoRequest:false];
 }
 
-- (NSURLRequest*) newLaunchRequest:(StreamConfiguration*)config {
-    BOOL sops = config.optimizeGameSettings;
-    
-    // Using an FPS value over 60 causes SOPS to default to 720p60.
-    // We used to set it to 60, but that stopped working in GFE 3.20.3.
-    // Disabling SOPS allows the actual game frame rate to exceed 60.
-    if (config.frameRate > 60) {
-        sops = NO;
-    }
-    
-    NSString* urlString = [NSString stringWithFormat:@"%@/launch?uniqueid=%@&appid=%@&mode=%dx%dx%d&additionalStates=1&sops=%d&rikey=%@&rikeyid=%d%@&localAudioPlayMode=%d&surroundAudioInfo=%d",
-                           _baseHTTPSURL, _uniqueId,
+- (NSURLRequest*) newLaunchOrResumeRequest:(NSString*)verb config:(StreamConfiguration*)config {
+    // Using an FPS value over 60 causes SOPS to default to 720p60,
+    // so force it to 0 to ensure the correct resolution is set. We
+    // used to use 60 here but that locked the frame rate to 60 FPS
+    // on GFE 3.20.3. We do not do this hack for Sunshine (which is
+    // indicated by a negative version in the last field.
+    int fps = (config.frameRate > 60 && ![config.appVersion containsString:@".-"]) ? 0 : config.frameRate;
+
+    NSString* urlString = [NSString stringWithFormat:@"%@/%@?uniqueid=%@&appid=%@&mode=%dx%dx%d&additionalStates=1&sops=%d&rikey=%@&rikeyid=%d%@&localAudioPlayMode=%d&surroundAudioInfo=%d&remoteControllersBitmap=%d&gcmap=%d&gcpersist=%d%s",
+                           _baseHTTPSURL, verb, _uniqueId,
                            config.appID,
-                           config.width, config.height, config.frameRate,
-                           sops ? 1 : 0,
+                           config.width, config.height, fps,
+                           config.optimizeGameSettings ? 1 : 0,
                            [Utils bytesToHex:config.riKey], config.riKeyId,
-                           config.enableHdr ? @"&hdrMode=1&clientHdrCapVersion=0&clientHdrCapSupportedFlagsInUint32=0&clientHdrCapMetaDataId=NV_STATIC_METADATA_TYPE_1&clientHdrCapDisplayData=0x0x0x0x0x0x0x0x0x0x0": @"",
+                           (config.supportedVideoFormats & VIDEO_FORMAT_MASK_10BIT) ? @"&hdrMode=1&clientHdrCapVersion=0&clientHdrCapSupportedFlagsInUint32=0&clientHdrCapMetaDataId=NV_STATIC_METADATA_TYPE_1&clientHdrCapDisplayData=0x0x0x0x0x0x0x0x0x0x0": @"",
                            config.playAudioOnPC ? 1 : 0,
-                           SURROUNDAUDIOINFO_FROM_AUDIO_CONFIGURATION(config.audioConfiguration)];
-    Log(LOG_I, @"Requesting: %@", urlString);
-    // This blocks while the app is launching
+                           SURROUNDAUDIOINFO_FROM_AUDIO_CONFIGURATION(config.audioConfiguration),
+                           config.gamepadMask, config.gamepadMask,
+                           !config.multiController ? 1 : 0,
+                           LiGetLaunchUrlQueryParameters()];
+    // This blocks while the app is launching or resuming
     return [self createRequestFromString:urlString timeout:LONG_TIMEOUT_SEC];
 }
 
+- (NSURLRequest*) newLaunchRequest:(StreamConfiguration*)config {
+    return [self newLaunchOrResumeRequest:@"launch" config:config];
+}
+
 - (NSURLRequest*) newResumeRequest:(StreamConfiguration*)config {
-    BOOL sops = config.optimizeGameSettings;
-    
-    // Using an FPS value over 60 causes SOPS to default to 720p60.
-    // We used to set it to 60, but that stopped working in GFE 3.20.3.
-    // Disabling SOPS allows the actual game frame rate to exceed 60.
-    if (config.frameRate > 60) {
-        sops = NO;
-    }
-    
-    NSString* urlString = [NSString stringWithFormat:@"%@/resume?uniqueid=%@&appid=%@&mode=%dx%dx%d&additionalStates=1&sops=%d&rikey=%@&rikeyid=%d%@&localAudioPlayMode=%d&surroundAudioInfo=%d",
-                           _baseHTTPSURL, _uniqueId,
-                           config.appID,
-                           config.width, config.height, config.frameRate,
-                           sops ? 1 : 0,
-                           [Utils bytesToHex:config.riKey], config.riKeyId,
-                           config.enableHdr ? @"&hdrMode=1&clientHdrCapVersion=0&clientHdrCapSupportedFlagsInUint32=0&clientHdrCapMetaDataId=NV_STATIC_METADATA_TYPE_1&clientHdrCapDisplayData=0x0x0x0x0x0x0x0x0x0x0": @"",
-                           config.playAudioOnPC ? 1 : 0,
-                           SURROUNDAUDIOINFO_FROM_AUDIO_CONFIGURATION(config.audioConfiguration)];
-    Log(LOG_I, @"Requesting: %@", urlString);
-    // This blocks while the app is resuming
-    return [self createRequestFromString:urlString timeout:LONG_TIMEOUT_SEC];
+    return [self newLaunchOrResumeRequest:@"resume" config:config];
 }
 
 - (NSURLRequest*) newQuitAppRequest {
