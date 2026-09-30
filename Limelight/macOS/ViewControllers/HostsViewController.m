@@ -292,6 +292,49 @@
     otpPairMenuItem.representedObject = host;
     otpPairMenuItem.hidden = host.pairState == PairStatePaired;
     otpPairMenuItem.enabled = host.state == StateOnline;
+
+    NSMenuItem *permissionsMenuItem = [HostsViewController getMenuItemForIdentifier:@"apolloPermissionsMenuItem" inMenu:menu];
+    if (permissionsMenuItem == nil) {
+        permissionsMenuItem = [[NSMenuItem alloc] initWithTitle:@"Apollo Permissions…" action:@selector(apolloPermissionsMenuItemClicked:) keyEquivalent:@""];
+        permissionsMenuItem.identifier = @"apolloPermissionsMenuItem";
+        permissionsMenuItem.target = self;
+        permissionsMenuItem.image = [NSImage imageWithSystemSymbolName:@"checkmark.shield" accessibilityDescription:nil];
+        [menu addItem:permissionsMenuItem];
+    }
+    permissionsMenuItem.representedObject = host;
+    permissionsMenuItem.hidden = !(host.pairState == PairStatePaired && host.permission >= 0);
+}
+
+- (IBAction)apolloPermissionsMenuItemClicked:(NSMenuItem *)item {
+    TemporaryHost *host = item.representedObject;
+    if (host == nil || host.permission < 0) {
+        return;
+    }
+
+    uint32_t permission = (uint32_t)host.permission;
+    NSArray<NSArray *> *entries = @[
+        @[@"Controller input", @(ApolloPermissionInputController)],
+        @[@"Touch input", @(ApolloPermissionInputTouch)],
+        @[@"Pen input", @(ApolloPermissionInputPen)],
+        @[@"Mouse input", @(ApolloPermissionInputMouse)],
+        @[@"Keyboard input", @(ApolloPermissionInputKeyboard)],
+        @[@"Send clipboard to host", @(ApolloPermissionClipboardSet)],
+        @[@"Read host clipboard", @(ApolloPermissionClipboardRead)],
+        @[@"Server commands", @(ApolloPermissionServerCommand)],
+        @[@"List apps", @(ApolloPermissionListApps)],
+        // Launching implies viewing, and viewing implies listing
+        @[@"View streams", @(ApolloPermissionViewStreams | ApolloPermissionLaunchApps)],
+        @[@"Launch apps", @(ApolloPermissionLaunchApps)],
+    ];
+
+    NSMutableString *details = [NSMutableString string];
+    for (NSArray *entry in entries) {
+        BOOL granted = (permission & [entry[1] unsignedIntValue]) != 0;
+        [details appendFormat:@"%@  %@\n", granted ? @"✓" : @"✗", entry[0]];
+    }
+    [details appendString:@"\nChange these in Apollo's web UI under Clients."];
+
+    [AlertPresenter displayAlert:NSAlertStyleInformational title:[NSString stringWithFormat:@"%@ grants this Mac:", host.name] message:details window:self.view.window completionHandler:nil];
 }
 
 - (IBAction)otpPairMenuItemClicked:(NSMenuItem *)item {
