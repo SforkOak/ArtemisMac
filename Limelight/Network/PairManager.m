@@ -19,6 +19,8 @@
     HttpManager* _httpManager;
     NSData* _clientCert;
     id<PairCallback> _callback;
+    NSString* _otpPin;
+    NSString* _otpPassphrase;
 }
 
 - (id) initWithManager:(HttpManager*)httpManager clientCert:(NSData*)clientCert callback:(id<PairCallback>)callback {
@@ -29,9 +31,17 @@
     return self;
 }
 
+- (id) initWithManager:(HttpManager*)httpManager clientCert:(NSData*)clientCert otpPin:(NSString*)pin passphrase:(NSString*)passphrase callback:(id<PairCallback>)callback {
+    self = [self initWithManager:httpManager clientCert:clientCert callback:callback];
+    _otpPin = pin;
+    _otpPassphrase = passphrase;
+    return self;
+}
+
 - (void) main {
-    // We have to call startPairing before calling any other _callback functions
-    NSString* PIN = [self generatePIN];
+    // We have to call startPairing before calling any other _callback functions.
+    // With OTP pairing the PIN comes from Apollo rather than from us.
+    NSString* PIN = _otpPin != nil ? _otpPin : [self generatePIN];
     [_callback startPairing:PIN];
     
     ServerInfoResponse* serverInfoResp = [[ServerInfoResponse alloc] init];
@@ -99,11 +109,20 @@
     }];
 #endif
     
-    NSData* salt = [self saltPIN:PIN];
-    Log(LOG_I, @"PIN: %@, saltedPIN: %@", PIN, salt);
-    
+    // Only the random salt goes on the wire; the PIN is used solely to derive the AES key.
+    // (Sending the salted PIN, as this client used to, exposed the PIN in a plain HTTP URL.)
+    NSData* salt = [Utils randomBytes:16];
+    NSData* saltedPIN = [self concatData:salt with:[PIN dataUsingEncoding:NSUTF8StringEncoding]];
+
+    NSString* otpAuth = nil;
+    if (_otpPassphrase != nil) {
+        // Apollo checks SHA256(pin + salt hex + passphrase), in uppercase hex, against the OTP it issued
+        NSString* otpInput = [NSString stringWithFormat:@"%@%@%@", PIN, [Utils bytesToHex:salt], _otpPassphrase];
+        otpAuth = [Utils bytesToHex:[[[CryptoManager alloc] init] SHA256HashData:[otpInput dataUsingEncoding:NSUTF8StringEncoding]]];
+    }
+
     HttpResponse* pairResp = [[HttpResponse alloc] init];
-    [_httpManager executeRequestSynchronously:[HttpRequest requestForResponse:pairResp withUrlRequest:[_httpManager newPairRequest:salt clientCert:_clientCert]]];
+    [_httpManager executeRequestSynchronously:[HttpRequest requestForResponse:pairResp withUrlRequest:[_httpManager newPairRequest:salt clientCert:_clientCert otpAuth:otpAuth]]];
     if (![self verifyResponseStatus:pairResp]) {
         [self finishPairing:bgId forResponse:pairResp withFallbackError:@"Pairing was declined by the target."];
         return;
@@ -125,11 +144,11 @@
     // Gen 7 servers use SHA256 to get the key
     int hashLength;
     if (serverMajorVersion >= 7) {
-        aesKey = [cryptoMan createAESKeyFromSaltSHA256:salt];
+        aesKey = [cryptoMan createAESKeyFromSaltSHA256:saltedPIN];
         hashLength = 32;
     }
     else {
-        aesKey = [cryptoMan createAESKeyFromSaltSHA1:salt];
+        aesKey = [cryptoMan createAESKeyFromSaltSHA1:saltedPIN];
         hashLength = 20;
     }
     
@@ -233,13 +252,6 @@
                      arc4random() % 10, arc4random() % 10,
                      arc4random() % 10, arc4random() % 10];
     return PIN;
-}
-
-- (NSData*) saltPIN:(NSString*)PIN {
-    NSMutableData* saltedPIN = [[NSMutableData alloc] initWithCapacity:20];
-    [saltedPIN appendData:[Utils randomBytes:16]];
-    [saltedPIN appendBytes:[PIN UTF8String] length:4];
-    return saltedPIN;
 }
 
 @end

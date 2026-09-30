@@ -153,9 +153,10 @@ static const NSString* HTTPS_PORT = @"47984";
     return request;
 }
 
-- (NSURLRequest*) newPairRequest:(NSData*)salt clientCert:(NSData*)clientCert {
-    NSString* urlString = [NSString stringWithFormat:@"%@/pair?uniqueid=%@&devicename=%@&updateState=1&phrase=getservercert&salt=%@&clientcert=%@",
-                           _baseHTTPURL, _uniqueId, _deviceName, [self bytesToHex:salt], [self bytesToHex:clientCert]];
+- (NSURLRequest*) newPairRequest:(NSData*)salt clientCert:(NSData*)clientCert otpAuth:(NSString*)otpAuth {
+    NSString* urlString = [NSString stringWithFormat:@"%@/pair?uniqueid=%@&devicename=%@&updateState=1&phrase=getservercert&salt=%@&clientcert=%@%@",
+                           _baseHTTPURL, _uniqueId, _deviceName, [self bytesToHex:salt], [self bytesToHex:clientCert],
+                           otpAuth != nil ? [NSString stringWithFormat:@"&otpauth=%@", otpAuth] : @""];
     // This call blocks while waiting for the user to input the PIN on the PC
     return [self createRequestFromString:urlString timeout:EXTRA_LONG_TIMEOUT_SEC];
 }
@@ -256,6 +257,45 @@ static const NSString* HTTPS_PORT = @"47984";
 - (NSURLRequest*) newAppAssetRequestWithAppId:(NSString *)appId {
     NSString* urlString = [NSString stringWithFormat:@"%@/appasset?uniqueid=%@&devicename=%@&appid=%@&AssetType=2&AssetIdx=0", _baseHTTPSURL, _uniqueId, _deviceName, appId];
     return [self createRequestFromString:urlString timeout:NORMAL_TIMEOUT_SEC];
+}
+
+- (NSURLRequest*) newGetClipboardRequest {
+    NSString* urlString = [NSString stringWithFormat:@"%@/actions/clipboard?uniqueid=%@&devicename=%@&type=text", _baseHTTPSURL, _uniqueId, _deviceName];
+    return [self createRequestFromString:urlString timeout:NORMAL_TIMEOUT_SEC];
+}
+
+- (NSURLRequest*) newSetClipboardRequest:(NSString*)text {
+    NSString* urlString = [NSString stringWithFormat:@"%@/actions/clipboard?uniqueid=%@&devicename=%@&type=text", _baseHTTPSURL, _uniqueId, _deviceName];
+    NSMutableURLRequest* request = [[self createRequestFromString:urlString timeout:NORMAL_TIMEOUT_SEC] mutableCopy];
+    request.HTTPMethod = @"POST";
+    request.HTTPBody = [text dataUsingEncoding:NSUTF8StringEncoding];
+    [request setValue:@"text/plain; charset=utf-8" forHTTPHeaderField:@"Content-Type"];
+    return request;
+}
+
+- (NSData*) executeRawRequestSynchronously:(NSURLRequest*)request httpStatus:(NSInteger*)httpStatus {
+    NSURLSession* session = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration ephemeralSessionConfiguration] delegate:self delegateQueue:nil];
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    __block NSData* body = nil;
+    __block NSInteger status = 0;
+
+    [[session dataTaskWithRequest:request completionHandler:^(NSData * __nullable data, NSURLResponse * __nullable response, NSError * __nullable error) {
+        if (error != nil) {
+            Log(LOG_D, @"Connection error: %@", error);
+            status = error.code;
+        } else {
+            status = [response isKindOfClass:[NSHTTPURLResponse class]] ? ((NSHTTPURLResponse*)response).statusCode : 0;
+            body = data;
+        }
+        dispatch_semaphore_signal(done);
+    }] resume];
+    dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
+    [session finishTasksAndInvalidate];
+
+    if (httpStatus != NULL) {
+        *httpStatus = status;
+    }
+    return body;
 }
 
 - (NSString*) bytesToHex:(NSData*)data {

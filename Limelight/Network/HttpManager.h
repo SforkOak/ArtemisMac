@@ -14,7 +14,8 @@
 
 - (id) initWithHost:(NSString*) host uniqueId:(NSString*) uniqueId serverCert:(NSData*) serverCert;
 - (void) setServerCert:(NSData*) serverCert;
-- (NSURLRequest*) newPairRequest:(NSData*)salt clientCert:(NSData*)clientCert;
+// otpAuth is Apollo's OTP hash, or nil for regular PIN pairing
+- (NSURLRequest*) newPairRequest:(NSData*)salt clientCert:(NSData*)clientCert otpAuth:(NSString*)otpAuth;
 - (NSURLRequest*) newUnpairRequest;
 - (NSURLRequest*) newChallengeRequest:(NSData*)challenge;
 - (NSURLRequest*) newChallengeRespRequest:(NSData*)challengeResp;
@@ -28,7 +29,13 @@
 - (NSURLRequest*) newResumeRequest:(StreamConfiguration*)config;
 - (NSURLRequest*) newQuitAppRequest;
 - (NSURLRequest*) newAppAssetRequestWithAppId:(NSString*)appId;
+// Apollo text clipboard. Only allowed while this client is streaming.
+- (NSURLRequest*) newGetClipboardRequest;
+- (NSURLRequest*) newSetClipboardRequest:(NSString*)text;
 - (void) executeRequestSynchronously:(HttpRequest*)request;
+// For responses that aren't XML: returns the body and sets *httpStatus to the HTTP
+// status code (or the NSURLError code if the request failed).
+- (NSData*) executeRawRequestSynchronously:(NSURLRequest*)request httpStatus:(NSInteger*)httpStatus;
 
 @end
 

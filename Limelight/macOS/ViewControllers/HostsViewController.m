@@ -31,6 +31,7 @@
 @property (nonatomic, strong) NSArray<TemporaryHost *> *hosts;
 @property (nonatomic, strong) TemporaryHost *selectedHost;
 @property (nonatomic, strong) NSAlert *pairAlert;
+@property (nonatomic) BOOL pairingWithOTP;
 @property (nonatomic, strong) NSAlert *addHostManuallyAlert;
 
 @property (nonatomic, strong) NSArray *hostList;
@@ -279,6 +280,64 @@
         }
     }
     showHiddenAppsMenuItem.state = host.showHiddenApps ? NSControlStateValueOn : NSControlStateValueOff;
+
+    NSMenuItem *otpPairMenuItem = [HostsViewController getMenuItemForIdentifier:@"otpPairMenuItem" inMenu:menu];
+    if (otpPairMenuItem == nil) {
+        otpPairMenuItem = [[NSMenuItem alloc] initWithTitle:@"Pair with OTP…" action:@selector(otpPairMenuItemClicked:) keyEquivalent:@""];
+        otpPairMenuItem.identifier = @"otpPairMenuItem";
+        otpPairMenuItem.target = self;
+        otpPairMenuItem.image = [NSImage imageWithSystemSymbolName:@"key" accessibilityDescription:nil];
+        [menu insertItem:otpPairMenuItem atIndex:0];
+    }
+    otpPairMenuItem.representedObject = host;
+    otpPairMenuItem.hidden = host.pairState == PairStatePaired;
+    otpPairMenuItem.enabled = host.state == StateOnline;
+}
+
+- (IBAction)otpPairMenuItemClicked:(NSMenuItem *)item {
+    TemporaryHost *host = item.representedObject;
+    if (host == nil) {
+        return;
+    }
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.alertStyle = NSAlertStyleInformational;
+    alert.messageText = [NSString stringWithFormat:@"Pair with %@ using OTP", host.name];
+    alert.informativeText = @"In Apollo's web UI, open the PIN pairing page and choose OTP. Enter the PIN and passphrase it shows.";
+
+    NSTextField *pinField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 240, 24)];
+    pinField.placeholderString = @"4-digit PIN";
+    NSSecureTextField *passphraseField = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(0, 0, 240, 24)];
+    passphraseField.placeholderString = @"Passphrase";
+
+    NSStackView *fields = [NSStackView stackViewWithViews:@[pinField, passphraseField]];
+    fields.orientation = NSUserInterfaceLayoutOrientationVertical;
+    fields.spacing = 8;
+    fields.frame = NSMakeRect(0, 0, 240, 56);
+    alert.accessoryView = fields;
+
+    [alert addButtonWithTitle:@"Pair"];
+    [alert addButtonWithTitle:@"Cancel"];
+    alert.window.initialFirstResponder = pinField;
+
+    [alert beginSheetModalForWindow:self.view.window completionHandler:^(NSModalResponse returnCode) {
+        if (returnCode != NSAlertFirstButtonReturn) {
+            return;
+        }
+
+        NSString *pin = [pinField.stringValue trim];
+        NSString *passphrase = passphraseField.stringValue;
+        NSCharacterSet *nonDigits = [[NSCharacterSet decimalDigitCharacterSet] invertedSet];
+        if (pin.length != 4 || [pin rangeOfCharacterFromSet:nonDigits].location != NSNotFound || passphrase.length == 0) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [AlertPresenter displayAlert:NSAlertStyleWarning title:@"Pairing Failed" message:@"Enter the 4-digit PIN and the passphrase shown in Apollo." window:self.view.window completionHandler:nil];
+            });
+            return;
+        }
+
+        self.selectedHost = host;
+        [self setupPairing:host otpPin:pin passphrase:passphrase];
+    }];
 }
 
 
@@ -367,14 +426,25 @@
 #pragma mark - Host Operations
 
 - (void)setupPairing:(TemporaryHost *)host {
+    [self setupPairing:host otpPin:nil passphrase:nil];
+}
+
+- (void)setupPairing:(TemporaryHost *)host otpPin:(NSString *)otpPin passphrase:(NSString *)passphrase {
     // Polling the server while pairing causes the server to screw up
     [self.discMan stopDiscoveryBlocking];
-    
+
     NSString *uniqueId = [IdManager getUniqueId];
     NSData *cert = [CryptoManager readCertFromFile];
 
     HttpManager* hMan = [[HttpManager alloc] initWithHost:host.activeAddress uniqueId:uniqueId serverCert:host.serverCert];
-    PairManager* pMan = [[PairManager alloc] initWithManager:hMan clientCert:cert callback:self];
+    PairManager* pMan;
+    if (otpPin != nil && passphrase != nil) {
+        self.pairingWithOTP = YES;
+        pMan = [[PairManager alloc] initWithManager:hMan clientCert:cert otpPin:otpPin passphrase:passphrase callback:self];
+    } else {
+        self.pairingWithOTP = NO;
+        pMan = [[PairManager alloc] initWithManager:hMan clientCert:cert callback:self];
+    }
     [self.opQueue addOperation:pMan];
 }
 
@@ -431,7 +501,10 @@
 
 - (void)startPairing:(NSString *)PIN {
     dispatch_async(dispatch_get_main_queue(), ^{
-        self.pairAlert = [AlertPresenter displayAlert:NSAlertStyleInformational title:[NSString stringWithFormat:@"Enter the following PIN on %@: %@", self.selectedHost.name, PIN] message:nil window:self.view.window completionHandler:nil];
+        NSString *title = self.pairingWithOTP
+            ? [NSString stringWithFormat:@"Pairing with %@…", self.selectedHost.name]
+            : [NSString stringWithFormat:@"Enter the following PIN on %@: %@", self.selectedHost.name, PIN];
+        self.pairAlert = [AlertPresenter displayAlert:NSAlertStyleInformational title:title message:nil window:self.view.window completionHandler:nil];
     });
 }
 

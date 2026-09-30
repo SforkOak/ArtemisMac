@@ -118,7 +118,10 @@
     [hMan executeRequestSynchronously:[HttpRequest requestForResponse:launchResp withUrlRequest:[hMan newLaunchRequest:_config]]];
     NSString *gameSession = [launchResp getStringTag:@"gamesession"];
     *sessionUrl = [launchResp getStringTag:@"sessionUrl0"];
-    if (![launchResp isStatusOk]) {
+    if (launchResp.statusCode == 403) {
+        [_callbacks launchFailed:@"The host denied permission to launch apps from this Mac. In Apollo's web UI, give this client the Launch Apps permission."];
+        return FALSE;
+    } else if (![launchResp isStatusOk]) {
         [_callbacks launchFailed:launchResp.statusMessage];
         Log(LOG_E, @"Failed Launch Response: %@", launchResp.statusMessage);
         return FALSE;
@@ -136,7 +139,10 @@
     [hMan executeRequestSynchronously:[HttpRequest requestForResponse:resumeResp withUrlRequest:[hMan newResumeRequest:_config]]];
     NSString* resume = [resumeResp getStringTag:@"resume"];
     *sessionUrl = [resumeResp getStringTag:@"sessionUrl0"];
-    if (![resumeResp isStatusOk]) {
+    if (resumeResp.statusCode == 403) {
+        [_callbacks launchFailed:@"The host denied permission to view this stream from this Mac. In Apollo's web UI, give this client the View Streams permission."];
+        return FALSE;
+    } else if (![resumeResp isStatusOk]) {
         [_callbacks launchFailed:resumeResp.statusMessage];
         Log(LOG_E, @"Failed Resume Response: %@", resumeResp.statusMessage);
         return FALSE;

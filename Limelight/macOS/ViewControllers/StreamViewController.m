@@ -19,6 +19,7 @@
 #import "StreamManager.h"
 #import "VideoDecoderRenderer.h"
 #import "HIDSupport.h"
+#import "ApolloSession.h"
 
 #import "Moonlight-Swift.h"
 
@@ -35,6 +36,8 @@
 @property (nonatomic, strong) HIDSupport *hidSupport;
 @property (nonatomic) BOOL useSystemControllerDriver;
 @property (nonatomic, strong) StreamManager *streamMan;
+@property (nonatomic, strong) ApolloSession *apolloSession;
+@property (nonatomic, strong) NSMenuItem *apolloMenuItem;
 @property (nonatomic, readonly) StreamViewMac *streamView;
 @property (nonatomic, strong) id windowDidExitFullScreenNotification;
 @property (nonatomic, strong) id windowDidEnterFullScreenNotification;
@@ -88,6 +91,7 @@
     
     self.windowDidResignKeyNotification = [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidResignKeyNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
         if ([weakSelf isOurWindowTheWindowInNotiifcation:note]) {
+            [weakSelf.apolloSession streamWindowDidResignKey];
             if (![weakSelf isWindowInCurrentSpace] || ![weakSelf isWindowFullscreen]) {
                 [weakSelf uncaptureMouse];
             }
@@ -95,6 +99,7 @@
     }];
     self.windowDidBecomeKeyNotification = [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidBecomeKeyNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
         if ([weakSelf isOurWindowTheWindowInNotiifcation:note]) {
+            [weakSelf.apolloSession streamWindowDidBecomeKey];
             if ([weakSelf isWindowInCurrentSpace]) {
                 if ([weakSelf isWindowFullscreen]) {
                     if ([weakSelf.view.window isKeyWindow]) {
@@ -110,6 +115,9 @@
     
     self.windowWillCloseNotification = [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowWillCloseNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
         if ([weakSelf isOurWindowTheWindowInNotiifcation:note]) {
+            // Stop the keepalive before the connection is torn down
+            [weakSelf.apolloSession streamWillStop];
+            [weakSelf removeApolloMenu];
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 if (weakSelf.useSystemControllerDriver) {
                     [weakSelf.controllerSupport cleanup];
@@ -144,6 +152,7 @@
     [[NSNotificationCenter defaultCenter] removeObserver:self.windowDidBecomeKeyNotification];
     [[NSNotificationCenter defaultCenter] removeObserver:self.windowWillCloseNotification];
 
+    [self removeApolloMenu];
     [self.hidSupport tearDownHidManager];
     self.hidSupport = nil;
 }
@@ -260,6 +269,14 @@
         }
     }
     
+    // Apollo menu shortcuts: Send Clipboard / Get Clipboard
+    if (self.apolloMenuItem != nil
+        && (event.keyCode == kVK_ANSI_V || event.keyCode == kVK_ANSI_C)
+        && eventModifierFlags == (NSEventModifierFlagControl | NSEventModifierFlagOption | NSEventModifierFlagCommand)) {
+        [self.hidSupport releaseAllModifierKeys];
+        return NO;
+    }
+
     if ((event.keyCode == kVK_ANSI_F && eventModifierFlags == (NSEventModifierFlagControl | NSEventModifierFlagCommand))
         || (event.keyCode == kVK_ANSI_F && eventModifierFlags == NSEventModifierFlagFunction)
         || (event.keyCode == kVK_ANSI_W && eventModifierFlags == (NSEventModifierFlagOption | NSEventModifierFlagControl))
@@ -321,6 +338,87 @@
     CGFloat width = (CGFloat)[self.class getResolution].width / screenScale;
     CGFloat height = (CGFloat)[self.class getResolution].height / screenScale;
     [self.view.window setContentSize:NSMakeSize(width, height)];
+}
+
+
+#pragma mark - Apollo
+
+// Adds an "Apollo" menu to the menu bar for the duration of a stream from an Apollo host
+- (void)installApolloMenu {
+    if (self.apolloMenuItem != nil || !self.app.host.isApollo) {
+        return;
+    }
+
+    NSMenu *apolloMenu = [[NSMenu alloc] initWithTitle:@"Apollo"];
+
+    NSMenuItem *sendClipboardItem = [apolloMenu addItemWithTitle:@"Send Clipboard to Host" action:@selector(sendClipboardToHost:) keyEquivalent:@"v"];
+    sendClipboardItem.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagOption | NSEventModifierFlagCommand;
+    sendClipboardItem.target = self;
+
+    NSMenuItem *getClipboardItem = [apolloMenu addItemWithTitle:@"Get Clipboard from Host" action:@selector(getClipboardFromHost:) keyEquivalent:@"c"];
+    getClipboardItem.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagOption | NSEventModifierFlagCommand;
+    getClipboardItem.target = self;
+
+    [apolloMenu addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem *serverCommandsItem = [apolloMenu addItemWithTitle:@"Server Commands" action:nil keyEquivalent:@""];
+    NSMenu *serverCommandsMenu = [[NSMenu alloc] initWithTitle:@"Server Commands"];
+    NSArray<NSString *> *commands = self.apolloSession.serverCommands;
+    if (commands.count == 0) {
+        NSMenuItem *emptyItem = [serverCommandsMenu addItemWithTitle:@"No Commands Available" action:nil keyEquivalent:@""];
+        emptyItem.enabled = NO;
+        NSMenuItem *hintItem = [serverCommandsMenu addItemWithTitle:@"Add commands in Apollo and grant this Mac the Server Command permission" action:nil keyEquivalent:@""];
+        hintItem.enabled = NO;
+    } else {
+        [commands enumerateObjectsUsingBlock:^(NSString *command, NSUInteger index, BOOL *stop) {
+            NSMenuItem *commandItem = [serverCommandsMenu addItemWithTitle:command action:@selector(executeServerCommand:) keyEquivalent:@""];
+            commandItem.tag = (NSInteger)index;
+            commandItem.target = self;
+        }];
+    }
+    serverCommandsItem.submenu = serverCommandsMenu;
+
+    self.apolloMenuItem = [[NSMenuItem alloc] initWithTitle:@"Apollo" action:nil keyEquivalent:@""];
+    self.apolloMenuItem.submenu = apolloMenu;
+
+    // Sit just before the Window menu
+    NSMenu *mainMenu = [NSApplication sharedApplication].mainMenu;
+    NSInteger windowMenuIndex = [mainMenu indexOfItemWithTag:4000];
+    [mainMenu insertItem:self.apolloMenuItem atIndex:windowMenuIndex >= 0 ? windowMenuIndex : mainMenu.numberOfItems];
+}
+
+- (void)removeApolloMenu {
+    if (self.apolloMenuItem != nil) {
+        [[NSApplication sharedApplication].mainMenu removeItem:self.apolloMenuItem];
+        self.apolloMenuItem = nil;
+    }
+}
+
+- (IBAction)sendClipboardToHost:(id)sender {
+    [self.apolloSession sendClipboardWithCompletion:^(NSString *error) {
+        [self showApolloError:error title:@"Couldn't Send Clipboard"];
+    }];
+}
+
+- (IBAction)getClipboardFromHost:(id)sender {
+    [self.apolloSession fetchClipboardWithCompletion:^(NSString *error) {
+        [self showApolloError:error title:@"Couldn't Get Clipboard"];
+    }];
+}
+
+- (IBAction)executeServerCommand:(NSMenuItem *)sender {
+    if (![self.apolloSession executeServerCommandAtIndex:(NSUInteger)sender.tag]) {
+        [self showApolloError:@"The stream isn't connected, or the command no longer exists on the host." title:@"Couldn't Run Server Command"];
+    }
+}
+
+- (void)showApolloError:(NSString *)error title:(NSString *)title {
+    if (error == nil) {
+        return;
+    }
+    [self.hidSupport releaseAllModifierKeys];
+    [self uncaptureMouse];
+    [AlertPresenter displayAlert:NSAlertStyleWarning title:title message:error window:self.view.window completionHandler:nil];
 }
 
 
@@ -425,8 +523,9 @@
 
 - (void)closeWindowFromMainQueueWithMessage:(NSString *)message {
     [self.hidSupport releaseAllModifierKeys];
-    
+
     dispatch_async(dispatch_get_main_queue(), ^{
+        [self.apolloSession streamWillStop];
         [self uncaptureMouse];
 
         [self.delegate appDidQuit:self.app];
@@ -487,8 +586,9 @@
         }
     }
     self.hidSupport = [[HIDSupport alloc] init:self.app.host];
-    
-    self.streamMan = [[StreamManager alloc] initWithConfig:streamConfig renderView:self.view connectionCallbacks:self];
+    self.apolloSession = [[ApolloSession alloc] initWithHost:self.app.host];
+
+    self.streamMan =[[StreamManager alloc] initWithConfig:streamConfig renderView:self.view connectionCallbacks:self];
     NSOperationQueue* opQueue = [[NSOperationQueue alloc] init];
     [opQueue addOperation:self.streamMan];
 }
@@ -525,7 +625,10 @@
 - (void)connectionStarted {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.streamView.statusText = nil;
-        
+
+        [self.apolloSession streamStarted];
+        [self installApolloMenu];
+
         if ([SettingsClass autoFullscreenFor:self.app.host.uuid]) {
             if (!(self.view.window.styleMask & NSWindowStyleMaskFullScreen)) {
                 [self.view.window toggleFullScreen:self];

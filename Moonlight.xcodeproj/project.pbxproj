@@ -137,6 +137,7 @@
 				Network/PairManager.m,
 				Network/ServerInfoResponse.m,
 				Network/WakeOnLanManager.m,
+				Stream/ApolloSession.m,
 				Stream/Connection.m,
 				Stream/RendererLayerContainer.m,
 				Stream/StreamConfiguration.m,
