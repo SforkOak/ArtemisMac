@@ -9,6 +9,7 @@
 #import "Connection.h"
 #import "AudioRenderer.h"
 #import "Utils.h"
+#import "NetworkRoute.h"
 
 #import "Moonlight-Swift.h"
 
@@ -218,15 +219,22 @@ void ClSetHdrMode(bool enabled)
     // the video and audio streams costs next to nothing.
     _streamConfig.encryptionFlags = ENCFLG_ALL;
 
-    if ([Utils isActiveNetworkVPN]) {
-        // Force remote streaming mode when a VPN is connected
-        _streamConfig.streamingRemotely = STREAM_CFG_REMOTE;
-        _streamConfig.packetSize = 1024;
-    }
-    else {
-        // Detect remote streaming automatically based on the IP address of the target
-        _streamConfig.streamingRemotely = STREAM_CFG_AUTO;
-        _streamConfig.packetSize = 1392;
+    // Decide by the checked route rather than "is any VPN up", which Tailscale's
+    // utun always is, and which made every LAN stream use small remote packets
+    switch (config.networkRoute.kind) {
+        case ArtemisRouteLAN:
+        case ArtemisRouteLoopback:
+            _streamConfig.streamingRemotely = STREAM_CFG_LOCAL;
+            _streamConfig.packetSize = 1392;
+            break;
+        case ArtemisRouteTailscale:
+        case ArtemisRouteTailscaleSubnet:
+        default:
+            // Tailscale's tunnel MTU is 1280, so keep packets from fragmenting.
+            // The internet (with the policy off) gets the same cap.
+            _streamConfig.streamingRemotely = STREAM_CFG_REMOTE;
+            _streamConfig.packetSize = 1024;
+            break;
     }
 
     memcpy(_streamConfig.remoteInputAesKey, [config.riKey bytes], [config.riKey length]);

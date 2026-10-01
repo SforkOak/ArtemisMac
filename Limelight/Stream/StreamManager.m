@@ -37,6 +37,20 @@
 }
 
 - (void)main {
+    // A stream may only use the local network or Tailscale, unless the policy is off
+    NetworkRoute* route = [NetworkRoute routeToHost:_config.host];
+    Log(LOG_I, @"Network route: %@", route);
+    if (!route.allowed) {
+        [_callbacks launchFailed:route.failureMessage];
+        return;
+    }
+    if (route.address != nil) {
+        // Connect to the address that was checked, not whatever a name resolves to later
+        _config.host = route.address;
+    }
+    _config.networkRoute = route;
+    _networkRoute = route;
+
     [CryptoManager generateKeyPairUsingSSL];
     NSString* uniqueId = [IdManager getUniqueId];
     

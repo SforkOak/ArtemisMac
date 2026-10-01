@@ -4,6 +4,7 @@
 //
 
 #import "NetworkRoute.h"
+#import "TailscaleStatus.h"
 
 #include <net/if.h>
 #include <netdb.h>
@@ -105,6 +106,31 @@ static NSString *const kAllowAnyNetworkKey = @"allowAnyNetwork";
         route->_failureMessage = [self openInternetMessage];
     }
     return route;
+}
+
+- (NSString *)pathDescription {
+    switch (self.kind) {
+        case ArtemisRouteLAN:
+            return [NSString stringWithFormat:@"LAN (%@)", self.interfaceName];
+        case ArtemisRouteLoopback:
+            return @"this Mac";
+        case ArtemisRouteTailscale:
+        case ArtemisRouteTailscaleSubnet: {
+            TailscaleStatus *status = [TailscaleStatus cachedStatusRefreshingAfter:10];
+            TailscalePeer *peer = self.address != nil ? [status peerRoutingAddress:self.address] : nil;
+            NSString *via = @"";
+            if (self.kind == ArtemisRouteTailscaleSubnet) {
+                via = [NSString stringWithFormat:@" via %@", peer.hostName ?: @"a subnet router"];
+            }
+            if (peer == nil) {
+                return [NSString stringWithFormat:@"Tailscale%@", via];
+            }
+            return [NSString stringWithFormat:@"Tailscale%@ %@%@", via, peer.pathDescription,
+                    peer.relayed ? @" ⚠ adds latency, limits bandwidth" : @""];
+        }
+        default:
+            return self.allowed ? @"Internet (network policy off)" : @"Internet";
+    }
 }
 
 - (NSString *)description {

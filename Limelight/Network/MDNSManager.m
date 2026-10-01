@@ -8,6 +8,7 @@
 
 #import "MDNSManager.h"
 #import "TemporaryHost.h"
+#import "NetworkRoute.h"
 
 #include <arpa/inet.h>
 
@@ -186,7 +187,8 @@ static NSString* NV_SERVICE_TYPE = @"_nvstream._tcp";
             
             // Don't send a STUN request if we're connected to a VPN. We'll likely get the VPN
             // gateway's external address rather than the external address of the LAN.
-            if (![Utils isActiveNetworkVPN]) {
+            // The external address is only used with the network policy off.
+            if ([NetworkRoute allowAnyNetwork] && ![Utils isActiveNetworkVPN]) {
                 // Since we discovered this host over IPv4 mDNS, we know we're on the same network
                 // as the PC and we can use our current WAN address as a likely candidate
                 // for our PC's external address.

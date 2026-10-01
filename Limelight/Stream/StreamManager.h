@@ -9,6 +9,7 @@
 #import "StreamConfiguration.h"
 #import "Connection.h"
 #import "VideoStats.h"
+#import "NetworkRoute.h"
 
 @interface StreamManager : NSOperation
 
@@ -24,6 +25,9 @@
 
 // Latency statistics for the running stream (nil until the stream starts)
 @property (atomic, readonly, strong) VideoStats* videoStats;
+
+// How the stream reaches the host (nil until checked)
+@property (atomic, readonly, strong) NetworkRoute* networkRoute;
 
 // Main thread. Text drawn over the video, or nil for none (ignored until the stream starts).
 - (void) setStatsOverlayText:(NSString *)text;

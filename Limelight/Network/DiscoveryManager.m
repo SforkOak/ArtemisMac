@@ -14,6 +14,7 @@
 #import "DiscoveryWorker.h"
 #import "ServerInfoResponse.h"
 #import "IdManager.h"
+#import "NetworkRoute.h"
 
 #include <Limelight.h>
 #include <arpa/inet.h>
@@ -127,6 +128,14 @@
 }
 
 - (void) discoverHost:(NSString *)hostAddress withCallback:(void (^)(TemporaryHost *, NSString*))callback {
+    // Refuse an address that would be reached over the open internet before contacting it
+    NetworkRoute* route = [NetworkRoute routeToHost:hostAddress];
+    Log(LOG_I, @"Adding host: %@", route);
+    if (!route.allowed) {
+        callback(nil, route.failureMessage);
+        return;
+    }
+
     BOOL prohibitedAddress = [DiscoveryManager isProhibitedAddress:hostAddress];
     NSString* prohibitedAddressMessage = [NSString stringWithFormat: @"Moonlight only supports adding PCs on your local network on %s.",
     #if TARGET_OS_TV
@@ -179,7 +188,8 @@
                 callback(nil, prohibitedAddressMessage);
                 return;
             }
-            else if ([DiscoveryManager isAddressLAN:inet_addr([hostAddress UTF8String])]) {
+            else if ([NetworkRoute allowAnyNetwork] && [DiscoveryManager isAddressLAN:inet_addr([hostAddress UTF8String])]) {
+                // Only with the network policy off: the external address is never used otherwise
                 // Don't send a STUN request if we're connected to a VPN. We'll likely get the VPN
                 // gateway's external address rather than the external address of the LAN.
                 if (![Utils isActiveNetworkVPN]) {

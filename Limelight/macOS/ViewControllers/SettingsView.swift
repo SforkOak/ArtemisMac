@@ -500,6 +500,8 @@ struct ApolloView: View {
 
 struct AppView: View {
     @EnvironmentObject private var settingsModel: SettingsModel
+    // Global rather than per host: read by NetworkRoute
+    @AppStorage("allowAnyNetwork") private var allowAnyNetwork = false
     
     var body: some View {
         ScrollView {
@@ -519,6 +521,17 @@ struct AppView: View {
                     FormCell(title: "Custom Artwork Dimensions", contentWidth: 0, content: {
                         DimensionsInputView(widthBinding: $settingsModel.appArtworkWidth, heightBinding: $settingsModel.appArtworkHeight, placeholderDimensions: CGSize(width: 300, height: 400))
                     })
+                }
+
+                Spacer()
+                    .frame(height: 32)
+
+                FormSection(title: "Network (Advanced)") {
+                    ToggleCell(title: "Allow Connections Over Any Network", boolBinding: $allowAnyNetwork)
+                    Text("Off: ArtemisMac only reaches PCs on your local network or over Tailscale, and refuses anything that would cross the open internet. Only turn this on if the PC is protected some other way.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .padding()

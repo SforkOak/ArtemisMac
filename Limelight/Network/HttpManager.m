@@ -10,6 +10,7 @@
 #import "HttpRequest.h"
 #import "CryptoManager.h"
 #import "TemporaryApp.h"
+#import "NetworkRoute.h"
 
 #include <libxml2/libxml/xmlreader.h>
 #include <string.h>
@@ -23,6 +24,7 @@
 
 @implementation HttpManager {
     NSURLSession* _urlSession;
+    NSString* _host;
     NSString* _baseHTTPURL;
     NSString* _baseHTTPSURL;
     NSString* _uniqueId;
@@ -55,6 +57,7 @@ static const NSString* HTTPS_PORT = @"47984";
     // their unique ID, so send our real per-install ID rather than the
     // shared ID stock Moonlight uses.
     _uniqueId = uniqueId;
+    _host = host;
     _deviceName = [Utils deviceName];
     _serverCert = serverCert;
     _requestLock = dispatch_semaphore_create(0);
@@ -75,6 +78,19 @@ static const NSString* HTTPS_PORT = @"47984";
 }
 
 - (void) executeRequestSynchronously:(HttpRequest*)request {
+    // Never contact a host over the open internet
+    if (![NetworkRoute allowAnyNetwork]) {
+        NetworkRoute* route = [NetworkRoute routeToHost:_host];
+        if (!route.allowed) {
+            Log(LOG_W, @"Not contacting %@: %@", _host, route);
+            if (request.response) {
+                request.response.statusCode = NSURLErrorCannotConnectToHost;
+                request.response.statusMessage = route.failureMessage;
+            }
+            return;
+        }
+    }
+
     NSURLSessionConfiguration* config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
     _urlSession = [NSURLSession sessionWithConfiguration:config delegate:self delegateQueue:nil];
 

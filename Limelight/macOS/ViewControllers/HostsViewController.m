@@ -28,6 +28,7 @@
 #import "AWDLController.h"
 #import "DeepLinkRouter.h"
 #import "WakeOnLanManager.h"
+#import "NetworkRoute.h"
 
 @interface HostsViewController () <NSCollectionViewDataSource, NSCollectionViewDelegate, NSSearchFieldDelegate, NSControlTextEditingDelegate, HostsViewControllerDelegate, DiscoveryCallback, PairCallback, NSMenuItemValidation>
 @property (nonatomic, strong) NSArray<TemporaryHost *> *hosts;
@@ -173,7 +174,7 @@
 
 - (TemporaryHost *)hostWithAddress:(NSString *)address {
     for (TemporaryHost *host in self.hostList ?: self.hosts) {
-        for (NSString *candidate in @[host.activeAddress ?: @"", host.address ?: @"", host.localAddress ?: @"", host.externalAddress ?: @"", host.ipv6Address ?: @""]) {
+        for (NSString *candidate in @[host.activeAddress ?: @"", host.address ?: @"", host.localAddress ?: @"", host.externalAddress ?: @"", host.ipv6Address ?: @"", host.tailscaleAddress ?: @""]) {
             if ([candidate caseInsensitiveCompare:address] == NSOrderedSame) {
                 return host;
             }
@@ -675,14 +676,11 @@ static NSString *const kAWDLExplainedDefaultsKey = @"awdlTradeoffExplained";
         
         // Initialize the non-persistent host state
         for (TemporaryHost* host in self.hosts) {
-            if (host.activeAddress == nil) {
-                host.activeAddress = host.localAddress;
-            }
-            if (host.activeAddress == nil) {
-                host.activeAddress = host.externalAddress;
-            }
-            if (host.activeAddress == nil) {
-                host.activeAddress = host.address;
+            // Discovery replaces this with the best allowed address within seconds
+            for (NSString *address in @[host.localAddress ?: @"", host.externalAddress ?: @"", host.address ?: @""]) {
+                if (host.activeAddress == nil && [NetworkRoute isUsableAddress:address]) {
+                    host.activeAddress = address;
+                }
             }
         }
     }

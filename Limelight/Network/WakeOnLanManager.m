@@ -8,6 +8,7 @@
 
 #import "WakeOnLanManager.h"
 #import "Utils.h"
+#import "NetworkRoute.h"
 #import <CoreFoundation/CoreFoundation.h>
 #import <sys/socket.h>
 #import <netinet/in.h>
@@ -50,6 +51,13 @@ static const int ports[numPorts] = {7, 9, 47998, 47999, 48000};
             address = "255.255.255.255";
         } else {
             // Requested address wasn't present
+            continue;
+        }
+
+        // The limited broadcast never leaves the link. Anything else must be allowed by
+        // the network policy, so the external address only gets a packet with it off.
+        if (i != 4 && ![NetworkRoute routeToHost:@(address)].allowed) {
+            Log(LOG_I, @"Not sending Wake-on-LAN to %s: it isn't on the local network or Tailscale", address);
             continue;
         }
         

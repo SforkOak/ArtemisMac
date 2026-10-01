@@ -31,6 +31,10 @@ NS_ASSUME_NONNULL_BEGIN
 // has a route) is.
 + (instancetype)routeToHost:(NSString *)host;
 
+// For the stats overlay: "LAN (en0)", "Tailscale direct (…)", "Tailscale relayed (DERP sfo)"
+// with a warning, and so on. Never blocks; Tailscale's path is refreshed in the background.
+- (NSString *)pathDescription;
+
 // The policy's off switch (NSUserDefaults "allowAnyNetwork", off by default)
 + (BOOL)allowAnyNetwork;
 

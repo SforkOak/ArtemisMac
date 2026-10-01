@@ -40,6 +40,8 @@ typedef NS_OPTIONS(uint32_t, ApolloPermission) {
 @property (atomic, nullable, retain) NSString *externalAddress;
 @property (atomic, nullable, retain) NSString *localAddress;
 @property (atomic, nullable, retain) NSString *ipv6Address;
+// The host's Tailscale address, found in `tailscale status` (not saved)
+@property (atomic, nullable, retain) NSString *tailscaleAddress;
 @property (atomic, nullable, retain) NSString *mac;
 @property (atomic)                   int serverCodecModeSupport;
 

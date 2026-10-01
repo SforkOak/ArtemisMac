@@ -6,6 +6,8 @@
 //  Copyright (c) 2014 Moonlight Stream. All rights reserved.
 //
 
+@class NetworkRoute;
+
 @interface StreamConfiguration : NSObject
 
 @property NSString* host;
@@ -42,5 +44,7 @@
 // YES: present on the display's refresh (smoother).
 @property BOOL vsync;
 @property NSData* serverCert;
+// How the stream reaches the host, checked against the network policy before launch
+@property NetworkRoute* networkRoute;
 
 @end

@@ -498,6 +498,7 @@ static NSString *const kShowStatsDefaultsKey = @"showStreamStats";
 
     NSString *text = [NSString stringWithFormat:
         @"%@\n"
+        @"Network      %@\n"
         @"RTT          %u ± %u ms\n"
         @"Host encode  %5.1f ms\n"
         @"Receive      %5.1f ms\n"
@@ -508,6 +509,7 @@ static NSString *const kShowStatsDefaultsKey = @"showStreamStats";
         @"Audio        %u underruns (%u ms), %u trimmed, %u dropped, pull ≤%u frames, gap ≤%.1f ms\n"
         @"Frames %u in, %u shown, %u lost, %u dropped, %u skipped, %u not displayed, %u keep-alive",
         videoStats.streamDescription ?: @"",
+        self.streamMan.networkRoute.pathDescription ?: @"",
         s.rttMs, s.rttVarianceMs,
         s.hostLatencyMs, s.networkReceiveMs + s.queueDelayMs, s.decodeMs,
         s.renderMs, s.drawMs, s.displayMs, s.drawableWaitMs, s.maxDrawableWaitMs,
