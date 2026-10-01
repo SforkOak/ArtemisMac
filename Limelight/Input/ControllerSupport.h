@@ -19,7 +19,8 @@
 @end
 
 @interface ControllerSupport : NSObject
-@property (nonatomic) BOOL shouldSendInputEvents;
+// Set on the main thread, read on the controller queue
+@property (atomic) BOOL shouldSendInputEvents;
 
 -(id) initWithConfig:(StreamConfiguration*)streamConfig presenceDelegate:(id<InputPresenceDelegate>)delegate;
 

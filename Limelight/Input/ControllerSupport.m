@@ -18,6 +18,8 @@
 @import AudioToolbox;
 @import CoreHaptics;
 
+#import <os/lock.h>
+
 enum ButtonDebouncerState {
     BDS_none,
     BDS_initialPress,
@@ -31,25 +33,30 @@ enum ButtonDebouncerState {
 @property (nonatomic, strong) GCControllerButtonInput *input;
 @property (nonatomic, strong) ControllerSupport *support;
 @property (nonatomic) unsigned int chordButton;
+@property (nonatomic, strong) dispatch_queue_t queue;
 
 @property (nonatomic, weak) ButtonDebouncer *other;
 
 @property (nonatomic) enum ButtonDebouncerState state;
 @property (nonatomic, strong) NSDate *buttonDownTime;
-@property (nonatomic, strong) NSTimer *buttonDebounceTimer;
-@property (nonatomic, strong) NSTimer *replicatedButtonTimeTimer;
+
+// The timers run on the controller queue with dispatch_after, because an NSTimer needs a
+// run loop and the queue doesn't have one. Bumping a generation cancels its pending timer.
+@property (nonatomic) NSUInteger buttonDebounceTimerGeneration;
+@property (nonatomic) NSUInteger replicatedButtonTimeTimerGeneration;
 
 @end
 
 @implementation ButtonDebouncer
 
-- (instancetype)initWithButton:(unsigned int)button input:(GCControllerButtonInput *)input controllerSupport:(ControllerSupport *)support chordButton:(unsigned int)chordButton {
+- (instancetype)initWithButton:(unsigned int)button input:(GCControllerButtonInput *)input controllerSupport:(ControllerSupport *)support chordButton:(unsigned int)chordButton queue:(dispatch_queue_t)queue {
     self = [super init];
     if (self) {
         self.button = button;
         self.input = input;
         self.support = support;
         self.chordButton = chordButton;
+        self.queue = queue;
     }
     return self;
 }
@@ -73,10 +80,12 @@ enum ButtonDebouncerState {
                 self.buttonDownTime = [[NSDate alloc] init];
                 controller.lastButtonFlags &= ~self.button;
                 
-                [self.buttonDebounceTimer invalidate];
-                self.buttonDebounceTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:NO block:^(NSTimer * _Nonnull timer) {
-                    [self initialPressTimeout:controller];
-                }];
+                NSUInteger generation = ++self.buttonDebounceTimerGeneration;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), self.queue, ^{
+                    if (self.buttonDebounceTimerGeneration == generation) {
+                        [self initialPressTimeout:controller];
+                    }
+                });
             }
         } else if (self.state == BDS_initialPress) {
             controller.lastButtonFlags &= ~self.button;
@@ -101,15 +110,18 @@ enum ButtonDebouncerState {
             
             NSTimeInterval pressDuration = -[self.buttonDownTime timeIntervalSinceNow];
             
-            [self.buttonDebounceTimer invalidate];
-            [self.replicatedButtonTimeTimer invalidate];
-            self.replicatedButtonTimeTimer = [NSTimer scheduledTimerWithTimeInterval:pressDuration repeats:NO block:^(NSTimer * _Nonnull timer) {
+            self.buttonDebounceTimerGeneration++;
+            NSUInteger generation = ++self.replicatedButtonTimeTimerGeneration;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(pressDuration * NSEC_PER_SEC)), self.queue, ^{
+                if (self.replicatedButtonTimeTimerGeneration != generation) {
+                    return;
+                }
                 
                 controller.lastButtonFlags &= ~self.button;
                 [self.support updateFinished:controller];
 
                 self.state = BDS_none;
-            }];
+            });
 
         } else if (self.state == BDS_chord && !self.input.pressed) {
             if (self.other.state == BDS_chord && !self.other.input.pressed) {
@@ -169,6 +181,14 @@ static const double MOUSE_SPEED_DIVISOR = 2.5;
     
     NSLock *_controllerStreamLock;
     NSMutableDictionary *_controllers;
+
+    // Gamepad input is handled on this queue instead of the main thread: the GCController
+    // value handlers and the debouncer timers run on it. _controllers, _controllerNumbers,
+    // _debouncers and the Controller objects' input state are only changed on it (the main
+    // thread's connect, disconnect and cleanup code uses dispatch_sync).
+    dispatch_queue_t _controllerQueue;
+    // Guards _controllers for rumble, which runs on moonlight-common-c's control thread
+    os_unfair_lock _controllersLock;
     id<InputPresenceDelegate> _presenceDelegate;
     
 #if TARGET_OS_IPHONE
@@ -199,18 +219,23 @@ static const double MOUSE_SPEED_DIVISOR = 2.5;
 
 -(void) rumble:(unsigned short)controllerNumber lowFreqMotor:(unsigned short)lowFreqMotor highFreqMotor:(unsigned short)highFreqMotor
 {
+    // This runs on moonlight-common-c's control thread. Holding the lock keeps the
+    // controller from being removed, and its haptics cleaned up, while the motors are set.
+    os_unfair_lock_lock(&_controllersLock);
+
     Controller* controller = [_controllers objectForKey:[NSNumber numberWithInteger:controllerNumber]];
     if (controller == nil && controllerNumber == 0 && _oscEnabled) {
         // No physical controller, but we have on-screen controls
         controller = _player0osc;
     }
-    if (controller == nil) {
-        // No connected controller for this player
-        return;
+
+    // If there's no connected controller for this player, there's nothing to do
+    if (controller != nil) {
+        [controller.lowFreqMotor setMotorAmplitude:lowFreqMotor];
+        [controller.highFreqMotor setMotorAmplitude:highFreqMotor];
     }
-    
-    [controller.lowFreqMotor setMotorAmplitude:lowFreqMotor];
-    [controller.highFreqMotor setMotorAmplitude:highFreqMotor];
+
+    os_unfair_lock_unlock(&_controllersLock);
 }
 
 -(void) updateLeftStick:(Controller*)controller x:(short)x y:(short)y
@@ -337,6 +362,8 @@ static const double MOUSE_SPEED_DIVISOR = 2.5;
         else if (controller.gamepad != NULL) {
             controller.gamepad.valueChangedHandler = NULL;
         }
+
+        controller.handlerQueue = dispatch_get_main_queue();
     }
 }
 
@@ -355,6 +382,9 @@ static const double MOUSE_SPEED_DIVISOR = 2.5;
 -(void) registerControllerCallbacks:(GCController*) controller
 {
     if (controller != NULL) {
+        // Deliver this controller's input on the controller queue instead of the main thread
+        controller.handlerQueue = _controllerQueue;
+
         // iOS 13 allows the Start button to behave like a normal button, however
         // older MFi controllers can send an instant down+up event for the start button
         // which means the button will not be down long enough to register on the PC.
@@ -371,18 +401,21 @@ static const double MOUSE_SPEED_DIVISOR = 2.5;
         
         if (useLegacyPausedHandler) {
             controller.controllerPausedHandler = ^(GCController *controller) {
-                Controller* limeController = [self->_controllers objectForKey:[NSNumber numberWithInteger:controller.playerIndex]];
-                
-                // Get off the main thread
-                dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+                // Run on the controller queue, which owns the controller state
+                dispatch_async(self->_controllerQueue, ^{
+                    Controller* limeController = [self->_controllers objectForKey:[NSNumber numberWithInteger:controller.playerIndex]];
+                    if (limeController == nil) {
+                        return;
+                    }
+
                     [self setButtonFlag:limeController flags:PLAY_FLAG];
                     [self updateFinished:limeController];
-                    
-                    // Pause for 100 ms
-                    usleep(100 * 1000);
-                    
-                    [self clearButtonFlag:limeController flags:PLAY_FLAG];
-                    [self updateFinished:limeController];
+
+                    // Release it 100 ms later
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(100 * NSEC_PER_MSEC)), self->_controllerQueue, ^{
+                        [self clearButtonFlag:limeController flags:PLAY_FLAG];
+                        [self updateFinished:limeController];
+                    });
                 });
             };
         }
@@ -391,6 +424,10 @@ static const double MOUSE_SPEED_DIVISOR = 2.5;
         if (controller.extendedGamepad != NULL) {
             controller.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *gamepad, GCControllerElement *element) {
                 Controller* limeController = [self->_controllers objectForKey:[NSNumber numberWithInteger:weakController.playerIndex]];
+                if (limeController == nil) {
+                    // Disconnected or cleaned up after this event was queued
+                    return;
+                }
                 short leftStickX, leftStickY;
                 short rightStickX, rightStickY;
                 unsigned char leftTrigger, rightTrigger;
@@ -453,6 +490,10 @@ static const double MOUSE_SPEED_DIVISOR = 2.5;
         else if (controller.gamepad != NULL) {
             controller.gamepad.valueChangedHandler = ^(GCGamepad *gamepad, GCControllerElement *element) {
                 Controller* limeController = [self->_controllers objectForKey:[NSNumber numberWithInteger:weakController.playerIndex]];
+                if (limeController == nil) {
+                    // Disconnected or cleaned up after this event was queued
+                    return;
+                }
                 UPDATE_BUTTON_FLAG(limeController, A_FLAG, gamepad.buttonA.pressed);
                 UPDATE_BUTTON_FLAG(limeController, B_FLAG, gamepad.buttonB.pressed);
                 UPDATE_BUTTON_FLAG(limeController, X_FLAG, gamepad.buttonX.pressed);
@@ -602,10 +643,11 @@ static const double MOUSE_SPEED_DIVISOR = 2.5;
     [self updateAutoOnScreenControlMode];
 }
 
+// Called on the main thread. Only the main thread changes _controllerNumbers, inside
+// dispatch_sync blocks, so reading it here without the queue is safe.
 -(void) assignController:(GCController*)controller {
     for (int i = 0; i < 4; i++) {
         if (!(_controllerNumbers & (1 << i))) {
-            _controllerNumbers |= (1 << i);
             controller.playerIndex = i;
             
             Controller* limeController;
@@ -623,7 +665,13 @@ static const double MOUSE_SPEED_DIVISOR = 2.5;
             // Prepare controller haptics for use
             [self initializeControllerHaptics:limeController];
 
-            [_controllers setObject:limeController forKey:[NSNumber numberWithInteger:controller.playerIndex]];
+            dispatch_sync(_controllerQueue, ^{
+                self->_controllerNumbers |= (1 << i);
+                
+                os_unfair_lock_lock(&self->_controllersLock);
+                [self->_controllers setObject:limeController forKey:[NSNumber numberWithInteger:i]];
+                os_unfair_lock_unlock(&self->_controllersLock);
+            });
             
             Log(LOG_I, @"Assigning controller index: %d", i);
             break;
@@ -690,13 +738,19 @@ static const double MOUSE_SPEED_DIVISOR = 2.5;
 
 -(NSUInteger) getConnectedGamepadCount
 {
-    return _controllers.count;
+    os_unfair_lock_lock(&_controllersLock);
+    NSUInteger count = _controllers.count;
+    os_unfair_lock_unlock(&_controllersLock);
+    return count;
 }
 
 -(id) initWithConfig:(StreamConfiguration*)streamConfig presenceDelegate:(id<InputPresenceDelegate>)delegate
 {
     self = [super init];
     
+    _controllerQueue = dispatch_queue_create("com.sforkoak.artemis.controller",
+                                             dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
+    _controllersLock = OS_UNFAIR_LOCK_INIT;
     _controllerStreamLock = [[NSLock alloc] init];
     _controllers = [[NSMutableDictionary alloc] init];
     _controllerNumbers = 0;
@@ -718,20 +772,29 @@ static const double MOUSE_SPEED_DIVISOR = 2.5;
     Log(LOG_I, @"Number of supported controllers connected: %d", [ControllerSupport getGamepadCount]);
     Log(LOG_I, @"Multi-controller: %d", _multiController);
     
+    // Assign every controller and build its debouncers before registering any callbacks:
+    // the callbacks run on the controller queue and read both
+    NSMutableArray<GCController*>* supportedControllers = [[NSMutableArray alloc] init];
     for (GCController* controller in [GCController controllers]) {
         if ([ControllerSupport isSupportedGamepad:controller]) {
             [self assignController:controller];
-            [self registerControllerCallbacks:controller];
+            [supportedControllers addObject:controller];
 
             if (@available(iOS 13.0, macOS 10.15, *)) {
-                ButtonDebouncer *play = [[ButtonDebouncer alloc] initWithButton:PLAY_FLAG input:controller.extendedGamepad.buttonMenu controllerSupport:self chordButton:SPECIAL_FLAG];
-                ButtonDebouncer *back = [[ButtonDebouncer alloc] initWithButton:BACK_FLAG input:controller.extendedGamepad.buttonOptions controllerSupport:self chordButton:SPECIAL_FLAG];
+                ButtonDebouncer *play = [[ButtonDebouncer alloc] initWithButton:PLAY_FLAG input:controller.extendedGamepad.buttonMenu controllerSupport:self chordButton:SPECIAL_FLAG queue:_controllerQueue];
+                ButtonDebouncer *back = [[ButtonDebouncer alloc] initWithButton:BACK_FLAG input:controller.extendedGamepad.buttonOptions controllerSupport:self chordButton:SPECIAL_FLAG queue:_controllerQueue];
                 play.other = back;
                 back.other = play;
-                _debouncers[@(PLAY_FLAG)][@(controller.playerIndex)] = play;
-                _debouncers[@(BACK_FLAG)][@(controller.playerIndex)] = back;
+                NSInteger playerIndex = controller.playerIndex;
+                dispatch_sync(_controllerQueue, ^{
+                    self->_debouncers[@(PLAY_FLAG)][@(playerIndex)] = play;
+                    self->_debouncers[@(BACK_FLAG)][@(playerIndex)] = back;
+                });
             }
         }
+    }
+    for (GCController* controller in supportedControllers) {
+        [self registerControllerCallbacks:controller];
     }
     
 #if TARGET_OS_IPHONE
@@ -774,20 +837,29 @@ static const double MOUSE_SPEED_DIVISOR = 2.5;
         }
         
         [self unregisterControllerCallbacks:controller];
-        self->_controllerNumbers &= ~(1 << controller.playerIndex);
-        Log(LOG_I, @"Unassigning controller index: %ld", (long)controller.playerIndex);
+        NSInteger playerIndex = controller.playerIndex;
+        Log(LOG_I, @"Unassigning controller index: %ld", (long)playerIndex);
         
-        // Unset the GCController on this object (in case it is the OSC, which will persist)
-        Controller* limeController = [self->_controllers objectForKey:[NSNumber numberWithInteger:controller.playerIndex]];
+        // Change the bookkeeping on the controller queue, between input events
+        __block Controller* limeController;
+        dispatch_sync(self->_controllerQueue, ^{
+            self->_controllerNumbers &= ~(1 << playerIndex);
+            
+            limeController = [self->_controllers objectForKey:[NSNumber numberWithInteger:playerIndex]];
+            
+            // Inform the server of the updated active gamepads before removing this controller
+            [self updateFinished:limeController];
+            
+            os_unfair_lock_lock(&self->_controllersLock);
+            [self->_controllers removeObjectForKey:[NSNumber numberWithInteger:playerIndex]];
+            os_unfair_lock_unlock(&self->_controllersLock);
+        });
         
-        // Stop haptics on this controller
+        // Stop haptics on this controller. Rumble can't reach it any more.
         [self cleanupControllerHaptics:limeController];
         
+        // Unset the GCController on this object (in case it is the OSC, which will persist)
         limeController.gamepad = nil;
-        
-        // Inform the server of the updated active gamepads before removing this controller
-        [self updateFinished:limeController];
-        [self->_controllers removeObjectForKey:[NSNumber numberWithInteger:controller.playerIndex]];
 
         // Re-evaluate the on-screen control mode
         [self updateAutoOnScreenControlMode];
@@ -864,17 +936,25 @@ static const double MOUSE_SPEED_DIVISOR = 2.5;
     _keyboardDisconnectObserver = nil;
 #endif
     
-    _controllerNumbers = 0;
-    
-    for (Controller* controller in [_controllers allValues]) {
-        [self cleanupControllerHaptics:controller];
-    }
-    [_controllers removeAllObjects];
-    
+    // Stop new input events first. Ones that are already queued find no controller.
     for (GCController* controller in [GCController controllers]) {
         if ([ControllerSupport isSupportedGamepad:controller]) {
             [self unregisterControllerCallbacks:controller];
         }
+    }
+    
+    __block NSArray<Controller*>* controllers;
+    dispatch_sync(_controllerQueue, ^{
+        self->_controllerNumbers = 0;
+        
+        os_unfair_lock_lock(&self->_controllersLock);
+        controllers = [self->_controllers allValues];
+        [self->_controllers removeAllObjects];
+        os_unfair_lock_unlock(&self->_controllersLock);
+    });
+    
+    for (Controller* controller in controllers) {
+        [self cleanupControllerHaptics:controller];
     }
     
 #if TARGET_OS_IPHONE

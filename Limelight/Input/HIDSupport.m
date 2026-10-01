@@ -394,9 +394,18 @@ typedef enum {
 #define k_unSwitchUSBPacketLength k_unSwitchMaxOutputPacketLength
 
 
+// Marks the HID queue, so code already running on it doesn't dispatch_sync onto it
+static void *HIDQueueKey = &HIDQueueKey;
+
 @interface HIDSupport ()
 @property (nonatomic) dispatch_queue_t rumbleQueue;
 @property (nonatomic, strong) NSDictionary *mappings;
+
+// Gamepad input is handled on its own interactive queue instead of the main thread.
+// The IOHIDManager delivers every callback on it, and hidManager is only touched on it
+// once the manager is active. The controller state and the last*State packets below
+// are owned by this queue.
+@property (nonatomic) dispatch_queue_t hidQueue;
 @property (nonatomic) IOHIDManagerRef hidManager;
 @property (nonatomic, strong) Controller *controller;
 @property (nonatomic) UInt8 previousLowFreqMotor;
@@ -408,8 +417,10 @@ typedef enum {
 @property (atomic) BOOL isRumbleTimer;
 @property (nonatomic) PS4StatePacket_t lastPS4State;
 @property (nonatomic) PS5StatePacket_t lastPS5State;
-@property (nonatomic) NSInteger controllerDriver;
-@property (nonatomic) BOOL isPS5Bluetooth;
+// Read once in init: the HID callbacks check it on every input value
+@property (nonatomic, readonly) NSInteger controllerDriver;
+// Written by the HID queue, read by the rumble loop
+@property (atomic) BOOL isPS5Bluetooth;
 
 @property (nonatomic) SwitchSimpleStatePacket_t lastSimpleSwitchState;
 @property (nonatomic) SwitchStatePacket_t lastSwitchState;
@@ -450,18 +461,21 @@ SwitchCommonOutputPacket_t switchRumblePacket;
     self = [super init];
     if (self) {
         self.host = host;
-        
-        [self setupHidManager];
-        
+        _controllerDriver = [SettingsClass controllerDriverFor:host.uuid];
+
+        // Everything the HID callbacks use must exist before setupHidManager,
+        // because the callbacks start arriving on the HID queue as soon as it returns
         self.ticks = [[Ticks alloc] init];
         self.switchUsingBluetooth = YES;
-        
+
         self.previousLowFreqMotor = 0xFF;
         self.previousHighFreqMotor = 0xFF;
 
-        [self rumbleSync];
-
         self.controller = [[Controller alloc] init];
+
+        [self setupHidManager];
+
+        [self rumbleSync];
 
         self.mouseQueue = dispatch_queue_create("com.sforkoak.artemis.mouse",
                                                 dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
@@ -881,6 +895,20 @@ SwitchCommonOutputPacket_t switchRumblePacket;
 }
 
 - (IOHIDDeviceRef)getFirstDevice {
+    // The rumble loop and the Switch vibration setup call this from their own queues.
+    // Hop onto the HID queue so the manager's device set isn't read while it changes,
+    // and so a torn-down manager is never used.
+    if (dispatch_get_specific(HIDQueueKey) != HIDQueueKey) {
+        __block IOHIDDeviceRef device = nil;
+        dispatch_sync(self.hidQueue, ^{
+            device = [self getFirstDevice];
+        });
+        return device;
+    }
+
+    if (self.hidManager == NULL) {
+        return nil;
+    }
     NSSet *devices = CFBridgingRelease(IOHIDManagerCopyDevices(self.hidManager));
     if (devices.count == 0) {
         return nil;
@@ -892,7 +920,7 @@ SwitchCommonOutputPacket_t switchRumblePacket;
             return hidDevice;
         }
     }
-    
+
     return nil;
 }
 
@@ -1116,10 +1144,6 @@ SwitchCommonOutputPacket_t switchRumblePacket;
 
 - (BOOL)useGCMouse {
     return [SettingsClass mouseDriverFor:self.host.uuid];
-}
-
-- (NSInteger)controllerDriver {
-    return [SettingsClass controllerDriverFor:self.host.uuid];
 }
 
 UInt16 usbIdFromDevice(IOHIDDeviceRef device, NSString *key) {
@@ -1755,29 +1779,44 @@ void myHIDDeviceRemovalCallback(void * _Nullable        context,
 }
 
 - (void)setupHidManager {
-    self.hidManager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
-    IOHIDManagerOpen(self.hidManager, kIOHIDOptionsTypeNone);
-    
+    // The rumble plumbing must exist before the manager is activated, because the
+    // device matching callback calls rumbleSync as soon as a gamepad is enumerated
+    self.rumbleSemaphore = dispatch_semaphore_create(0);
+    self.rumbleQueue = dispatch_queue_create("rumbleQueue", nil);
+
+    self.enableVibrationQueue = dispatch_queue_create("enableVibrationQueue", nil);
+
+    self.hidReadSemaphore = dispatch_semaphore_create(0);
+
+    self.hidQueue = dispatch_queue_create("com.sforkoak.artemis.hid",
+                                          dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
+    dispatch_queue_set_specific(self.hidQueue, HIDQueueKey, HIDQueueKey, NULL);
+
+    IOHIDManagerRef manager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
+    self.hidManager = manager;
+    IOHIDManagerOpen(manager, kIOHIDOptionsTypeNone);
+
     NSArray *matches = @[
                          @{@kIOHIDDeviceUsagePageKey: @(kHIDPage_GenericDesktop), @kIOHIDDeviceUsageKey: @(kHIDUsage_GD_Joystick)},
                          @{@kIOHIDDeviceUsagePageKey: @(kHIDPage_GenericDesktop), @kIOHIDDeviceUsageKey: @(kHIDUsage_GD_GamePad)},
                          @{@kIOHIDDeviceUsagePageKey: @(kHIDPage_GenericDesktop), @kIOHIDDeviceUsageKey: @(kHIDUsage_GD_MultiAxisController)},
                          ];
-    IOHIDManagerSetDeviceMatchingMultiple(self.hidManager, (__bridge CFArrayRef)matches);
-    
-    IOHIDManagerRegisterInputValueCallback(self.hidManager, myHIDCallback, (__bridge void * _Nullable)(self));
-    IOHIDManagerRegisterInputReportCallback(self.hidManager, myHIDReportCallback, (__bridge void * _Nullable)(self));
-    IOHIDManagerRegisterDeviceMatchingCallback(self.hidManager, myHIDDeviceMatchingCallback, (__bridge void * _Nullable)(self));
-    IOHIDManagerRegisterDeviceRemovalCallback(self.hidManager, myHIDDeviceRemovalCallback, (__bridge void * _Nullable)(self));
-    
-    IOHIDManagerScheduleWithRunLoop(self.hidManager, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
-    
-    self.rumbleSemaphore = dispatch_semaphore_create(0);
-    self.rumbleQueue = dispatch_queue_create("rumbleQueue", nil);
-    
-    self.enableVibrationQueue = dispatch_queue_create("enableVibrationQueue", nil);
+    IOHIDManagerSetDeviceMatchingMultiple(manager, (__bridge CFArrayRef)matches);
 
-    self.hidReadSemaphore = dispatch_semaphore_create(0);
+    IOHIDManagerRegisterInputValueCallback(manager, myHIDCallback, (__bridge void * _Nullable)(self));
+    IOHIDManagerRegisterInputReportCallback(manager, myHIDReportCallback, (__bridge void * _Nullable)(self));
+    IOHIDManagerRegisterDeviceMatchingCallback(manager, myHIDDeviceMatchingCallback, (__bridge void * _Nullable)(self));
+    IOHIDManagerRegisterDeviceRemovalCallback(manager, myHIDDeviceRemovalCallback, (__bridge void * _Nullable)(self));
+
+    // Deliver the callbacks on the HID queue instead of the main run loop. They get self
+    // as an unretained context pointer, so the cancel handler, which runs after the last
+    // callback has finished, keeps self alive until then.
+    IOHIDManagerSetDispatchQueue(manager, self.hidQueue);
+    IOHIDManagerSetCancelHandler(manager, ^{
+        CFRelease(manager);
+        (void)self;
+    });
+    IOHIDManagerActivate(manager);
 
     __weak typeof(self) weakSelf = self;
     dispatch_async(self.rumbleQueue, ^{
@@ -1811,10 +1850,18 @@ void myHIDDeviceRemovalCallback(void * _Nullable        context,
     dispatch_semaphore_signal(self.rumbleSemaphore);
     
     self.rumbleQueue = nil;
-    
-    IOHIDManagerUnscheduleFromRunLoop(self.hidManager, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
-    IOHIDManagerClose(self.hidManager, kIOHIDOptionsTypeNone);
-    CFRelease(self.hidManager);
+
+    // Close and cancel on the HID queue, so it happens between callbacks.
+    // The cancel handler releases the manager after the last callback.
+    dispatch_async(self.hidQueue, ^{
+        IOHIDManagerRef manager = self.hidManager;
+        if (manager == NULL) {
+            return;
+        }
+        self.hidManager = NULL;
+        IOHIDManagerClose(manager, kIOHIDOptionsTypeNone);
+        IOHIDManagerCancel(manager);
+    });
 }
 
 
