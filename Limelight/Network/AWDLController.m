@@ -197,7 +197,8 @@ static BOOL IsAWDLUp(void) {
 
 - (void)updateState {
     BOOL wanted = self.suppressionEnabled;
-    SMAppServiceStatus status = [self helperService].status;
+    // Only ask about the helper when it matters; each query is an XPC round trip to smd
+    SMAppServiceStatus status = wanted ? [self helperService].status : SMAppServiceStatusNotRegistered;
     BOOL up = IsAWDLUp();
 
     ArtemisAWDLState state;
