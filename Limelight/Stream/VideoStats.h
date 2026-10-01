@@ -21,6 +21,14 @@ typedef struct {
     uint64_t decodedTimeUs;          // VideoToolbox returned the image
 } ArtemisFrameTiming;
 
+// What happened to a frame after the presenter took it, on the same clock
+typedef struct {
+    uint64_t drawableWaitUs;         // time blocked getting a drawable
+    uint64_t committedTimeUs;        // drawing and the present were handed to the GPU
+    uint64_t gpuDoneTimeUs;          // GPU finished drawing, 0 if not known
+    uint64_t presentedTimeUs;        // MTLDrawable.presentedTime, 0 if it never reached the display
+} ArtemisPresentTiming;
+
 // One completed measurement window (about a second)
 typedef struct {
     double windowSeconds;
@@ -30,6 +38,7 @@ typedef struct {
     uint32_t framesLostInNetwork;    // frame number gaps
     uint32_t framesDroppedByDecoder;
     uint32_t framesSuperseded;       // decoded, but a newer frame took the slot before it was drawn
+    uint32_t framesNotDisplayed;     // drawn and presented, but never reached the display
 
     // Averages in milliseconds (0 when nothing was measured)
     double hostLatencyMs;
@@ -37,6 +46,10 @@ typedef struct {
     double queueDelayMs;             // reassembled -> submitted to the decoder
     double decodeMs;                 // submitted -> decoded
     double renderMs;                 // decoded -> presented on the display
+    double drawableWaitMs;           // part of renderMs spent waiting for a drawable
+    double maxDrawableWaitMs;
+    double drawMs;                   // decoded -> GPU finished drawing
+    double displayMs;                // GPU finished drawing -> presented on the display
     double clientTotalMs;            // first packet -> presented on the display
     double maxClientTotalMs;
 
@@ -58,8 +71,11 @@ typedef struct {
 - (void)recordReceivedFrame:(int)frameNumber;
 - (void)recordDecodedFrame:(const ArtemisFrameTiming *)timing;
 - (void)recordDecoderDrop;
-- (void)recordSupersededFrame;
-- (void)recordPresentedFrame:(const ArtemisFrameTiming *)timing presentedTimeUs:(uint64_t)presentedTimeUs;
+- (void)recordSupersededFrame:(const ArtemisFrameTiming *)timing;
+- (void)recordPresentedFrame:(const ArtemisFrameTiming *)timing present:(const ArtemisPresentTiming *)present;
+
+// Writes one CSV line per frame to path until the stats are reset, for offline analysis
+- (void)startTraceAtPath:(NSString *)path;
 
 // Returns NO until the first window completes
 - (BOOL)lastWindow:(ArtemisVideoStatsSnapshot *)snapshot;

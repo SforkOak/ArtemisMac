@@ -511,18 +511,19 @@ static NSString *const kShowStatsDefaultsKey = @"showStreamStats";
         @"Host encode  %5.1f ms\n"
         @"Receive      %5.1f ms\n"
         @"Decode       %5.1f ms\n"
-        @"Present      %5.1f ms\n"
+        @"Present      %5.1f ms (draw %.1f, display %.1f; drawable wait %.1f, max %.1f)\n"
         @"Client total %5.1f ms (max %.1f)\n"
         @"Audio queue  %5u ms (%u–%u)\n"
         @"Audio        %u underruns (%u ms), %u trimmed, %u dropped, pull ≤%u frames, gap ≤%.1f ms\n"
-        @"Frames %u in, %u shown, %u lost, %u dropped, %u skipped",
+        @"Frames %u in, %u shown, %u lost, %u dropped, %u skipped, %u not displayed",
         videoStats.streamDescription ?: @"",
         s.rttMs, s.rttVarianceMs,
-        s.hostLatencyMs, s.networkReceiveMs + s.queueDelayMs, s.decodeMs, s.renderMs,
+        s.hostLatencyMs, s.networkReceiveMs + s.queueDelayMs, s.decodeMs,
+        s.renderMs, s.drawMs, s.displayMs, s.drawableWaitMs, s.maxDrawableWaitMs,
         s.clientTotalMs, s.maxClientTotalMs,
         ArtemisAudioQueuedMs(), audio.minQueuedMs, audio.maxQueuedMs,
         audio.underruns, audio.underrunMs, audio.trimmedPackets, audio.overflowDrops, audio.maxCallbackFrames, audio.maxCallbackGapMs,
-        s.framesReceived, s.framesPresented, s.framesLostInNetwork, s.framesDroppedByDecoder, s.framesSuperseded];
+        s.framesReceived, s.framesPresented, s.framesLostInNetwork, s.framesDroppedByDecoder, s.framesSuperseded, s.framesNotDisplayed];
 
     if (self.statsOverlay != nil && !self.statsOverlay.hidden) {
         self.statsOverlay.stringValue = text;

@@ -246,13 +246,14 @@ static NSString *const kVideoShaderSource = @
     CVPixelBufferRetain(pixelBuffer);
     os_unfair_lock_lock(&_slotLock);
     CVPixelBufferRef replaced = _slotFrame;
+    ArtemisFrameTiming replacedTiming = _slotTiming;
     _slotFrame = pixelBuffer;
     _slotTiming = *timing;
     os_unfair_lock_unlock(&_slotLock);
 
     if (replaced != NULL) {
         CVPixelBufferRelease(replaced);
-        [_stats recordSupersededFrame];
+        [_stats recordSupersededFrame:&replacedTiming];
     }
     dispatch_semaphore_signal(_frameAvailable);
 }
@@ -266,6 +267,13 @@ static NSString *const kVideoShaderSource = @
     }
     os_unfair_lock_unlock(&_slotLock);
     return frame;
+}
+
+- (BOOL)slotHasFrame {
+    os_unfair_lock_lock(&_slotLock);
+    BOOL has = _slotFrame != NULL;
+    os_unfair_lock_unlock(&_slotLock);
+    return has;
 }
 
 - (void)clearSlot {
@@ -286,20 +294,56 @@ static NSString *const kVideoShaderSource = @
             break;
         }
 
-        ArtemisFrameTiming timing;
-        CVPixelBufferRef frame = [self takeFrame:&timing];
-        if (frame == NULL) {
-            // A wakeup for a frame that a newer one already replaced
+        if (![self slotHasFrame]) {
+            // A wakeup for a frame that an earlier pass already drew (or a newer one replaced)
             continue;
         }
 
         @autoreleasepool {
-            [self renderFrame:frame timing:&timing drawable:nil];
+            [self renderLatestFrame];
         }
-        CVPixelBufferRelease(frame);
     }
 
     dispatch_semaphore_signal(_threadExited);
+}
+
+// Our drawable is released as soon as we drop it, rather than when an outer pool drains
+- (nullable id<CAMetalDrawable>)nextDrawableWaitingUs:(uint64_t *)waitUs {
+    id<CAMetalDrawable> drawable;
+    uint64_t start = [VideoStats nowUs];
+    @autoreleasepool {
+        drawable = [_layer nextDrawable];
+    }
+    *waitUs += [VideoStats nowUs] - start;
+    return drawable;
+}
+
+// Gets the drawable before choosing the frame. nextDrawable blocks while the display still
+// holds both drawables (two frames within one refresh, as happens when the stream's frame
+// rate is above the display's), and a frame decoded during that wait should replace the one
+// that woke us instead of being drawn after it.
+- (void)renderLatestFrame {
+    uint64_t drawableWaitUs = 0;
+    id<CAMetalDrawable> drawable = [self nextDrawableWaitingUs:&drawableWaitUs];
+
+    ArtemisFrameTiming timing;
+    CVPixelBufferRef frame = [self takeFrame:&timing];
+    if (frame == NULL) {
+        return;
+    }
+
+    BOOL wantHdr = [self frameWantsHdr:frame];
+    if (wantHdr != _hdrOutput) {
+        // That drawable has the old pixel format
+        drawable = nil;
+        [self configureLayerForHdr:wantHdr];
+        drawable = [self nextDrawableWaitingUs:&drawableWaitUs];
+    }
+
+    if (drawable != nil) {
+        [self renderFrame:frame timing:&timing drawable:drawable drawableWaitUs:drawableWaitUs];
+    }
+    CVPixelBufferRelease(frame);
 }
 
 
@@ -345,7 +389,7 @@ static NSString *const kVideoShaderSource = @
     }
 
     if (frame != NULL) {
-        [self renderFrame:frame timing:&timing drawable:update.drawable];
+        [self renderFrame:frame timing:&timing drawable:update.drawable drawableWaitUs:0];
         CVPixelBufferRelease(frame);
     }
 }
@@ -410,6 +454,13 @@ static NSString *const kVideoShaderSource = @
     return colorspace;
 }
 
+- (BOOL)frameWantsHdr:(CVPixelBufferRef)frame {
+    OSType pixelFormat = CVPixelBufferGetPixelFormatType(frame);
+    BOOL tenBit = pixelFormat == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange ||
+                  pixelFormat == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange;
+    return tenBit && [self isPqFrame:frame];
+}
+
 - (BOOL)isPqFrame:(CVPixelBufferRef)frame {
     CFTypeRef transfer = CVBufferCopyAttachment(frame, kCVImageBufferTransferFunctionKey, NULL);
     BOOL pq = transfer != NULL && CFEqual(transfer, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ);
@@ -419,8 +470,8 @@ static NSString *const kVideoShaderSource = @
     return pq;
 }
 
-// Draws frame into drawable (or the layer's next drawable) and presents it
-- (void)renderFrame:(CVPixelBufferRef)frame timing:(const ArtemisFrameTiming *)timing drawable:(id<CAMetalDrawable>)providedDrawable {
+// Draws frame into drawable and presents it
+- (void)renderFrame:(CVPixelBufferRef)frame timing:(const ArtemisFrameTiming *)timing drawable:(id<CAMetalDrawable>)drawable drawableWaitUs:(uint64_t)drawableWaitUs {
     OSType pixelFormat = CVPixelBufferGetPixelFormatType(frame);
     BOOL tenBit = pixelFormat == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange ||
                   pixelFormat == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange;
@@ -431,11 +482,7 @@ static NSString *const kVideoShaderSource = @
         return;
     }
 
-    BOOL wantHdr = tenBit && [self isPqFrame:frame];
-    if (wantHdr != _hdrOutput && providedDrawable == nil) {
-        [self configureLayerForHdr:wantHdr];
-    }
-    if (![self ensurePipelineForPixelFormat:_layer.pixelFormat]) {
+    if (![self ensurePipelineForPixelFormat:drawable.texture.pixelFormat]) {
         return;
     }
 
@@ -452,13 +499,6 @@ static NSString *const kVideoShaderSource = @
         Log(LOG_E, @"CVMetalTextureCacheCreateTextureFromImage() failed");
         if (lumaRef != NULL) CFRelease(lumaRef);
         if (chromaRef != NULL) CFRelease(chromaRef);
-        return;
-    }
-
-    id<CAMetalDrawable> drawable = providedDrawable != nil ? providedDrawable : [_layer nextDrawable];
-    if (drawable == nil) {
-        CFRelease(lumaRef);
-        CFRelease(chromaRef);
         return;
     }
 
@@ -501,13 +541,20 @@ static NSString *const kVideoShaderSource = @
     [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
     [encoder endEncoding];
 
-    // Measure when the frame actually reached the display
+    // Measure when the frame actually reached the display. A drawable that never did
+    // (replaced by a newer one, or the window is hidden) reports a presentedTime of 0.
     ArtemisFrameTiming frameTiming = *timing;
+    ArtemisPresentTiming presentTiming = { .drawableWaitUs = drawableWaitUs, .committedTimeUs = [VideoStats nowUs] };
     VideoStats *stats = _stats;
     [drawable addPresentedHandler:^(id<MTLDrawable> presented) {
-        if (presented.presentedTime > 0) {
-            [stats recordPresentedFrame:&frameTiming presentedTimeUs:[VideoStats microsecondsFromMediaTime:presented.presentedTime]];
+        ArtemisPresentTiming p = presentTiming;
+        if (commandBuffer.status == MTLCommandBufferStatusCompleted && commandBuffer.GPUEndTime > 0) {
+            p.gpuDoneTimeUs = [VideoStats microsecondsFromMediaTime:commandBuffer.GPUEndTime];
         }
+        if (presented.presentedTime > 0) {
+            p.presentedTimeUs = [VideoStats microsecondsFromMediaTime:presented.presentedTime];
+        }
+        [stats recordPresentedFrame:&frameTiming present:&p];
     }];
 
     // The textures (and the decoded buffer behind them) must outlive the GPU work

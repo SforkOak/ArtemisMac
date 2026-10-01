@@ -96,6 +96,16 @@ static void DecompressionOutputCallback(void *decompressionOutputRefCon,
     NSString *codec = (videoFormat & VIDEO_FORMAT_MASK_AV1) ? @"AV1" : ((videoFormat & VIDEO_FORMAT_MASK_H265) ? @"HEVC" : @"H.264");
     _stats.streamDescription = [NSString stringWithFormat:@"%@%@ %dx%d %d FPS", codec, (videoFormat & VIDEO_FORMAT_MASK_10BIT) ? @" 10-bit" : @"", width, height, frameRate];
     Log(LOG_I, @"Decoder setup: %@", _stats.streamDescription);
+
+    // Debugging aid: `defaults write com.sforkoak.artemis.mac ArtemisFrameTraceDirectory <dir>`
+    // writes a per-frame CSV for each stream into that directory
+    NSString *traceDirectory = [NSUserDefaults.standardUserDefaults stringForKey:@"ArtemisFrameTraceDirectory"];
+    if (traceDirectory.length > 0) {
+        NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+        formatter.dateFormat = @"yyyyMMdd-HHmmss";
+        NSString *name = [NSString stringWithFormat:@"frames-%@-%dfps.csv", [formatter stringFromDate:[NSDate date]], frameRate];
+        [_stats startTraceAtPath:[traceDirectory.stringByExpandingTildeInPath stringByAppendingPathComponent:name]];
+    }
 }
 
 - (void)start {
