@@ -205,7 +205,7 @@ static BOOL IsAWDLUp(void) {
     NSString *text;
     if (wanted && status == SMAppServiceStatusRequiresApproval) {
         state = ArtemisAWDLStateNeedsApproval;
-        text = @"Allow Artemis in System Settings › Login Items";
+        text = @"Allow ArtemisMac in System Settings › Login Items";
     } else if (wanted && _lastError != nil) {
         state = ArtemisAWDLStateUnavailable;
         text = [NSString stringWithFormat:@"Helper unavailable: %@", _lastError];

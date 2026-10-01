@@ -113,7 +113,7 @@
         return;
     }
     if (port != nil && port.integerValue != 47989) {
-        [self showDeepLinkError:[NSString stringWithFormat:@"Artemis only supports hosts on the default port (47989), but this link uses %@.", port]];
+        [self showDeepLinkError:[NSString stringWithFormat:@"ArtemisMac only supports hosts on the default port (47989), but this link uses %@.", port]];
         return;
     }
 
@@ -196,7 +196,7 @@ static NSString *const kAWDLExplainedDefaultsKey = @"awdlTradeoffExplained";
 
     NSString *explanation = @"AWDL is the peer-to-peer Wi-Fi link behind AirDrop, Handoff, Universal Control, Sidecar and AirPlay to this Mac. "
                             @"It makes the Wi-Fi radio hop channels, which causes lag spikes while streaming over Wi-Fi. "
-                            @"While it's off, those features don't work. AWDL comes back as soon as Artemis quits.";
+                            @"While it's off, those features don't work. AWDL comes back as soon as ArtemisMac quits.";
 
     self.awdlSwitch = [[NSSwitch alloc] init];
     self.awdlSwitch.controlSize = NSControlSizeSmall;
@@ -204,7 +204,7 @@ static NSString *const kAWDLExplainedDefaultsKey = @"awdlTradeoffExplained";
     self.awdlSwitch.action = @selector(awdlSwitchChanged:);
     self.awdlSwitch.toolTip = explanation;
 
-    NSTextField *label = [NSTextField labelWithString:@"Disable AWDL while Artemis is open"];
+    NSTextField *label = [NSTextField labelWithString:@"Disable AWDL while ArtemisMac is open"];
     label.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
     label.toolTip = explanation;
 
@@ -274,8 +274,8 @@ static NSString *const kAWDLExplainedDefaultsKey = @"awdlTradeoffExplained";
     if (enable && ![NSUserDefaults.standardUserDefaults boolForKey:kAWDLExplainedDefaultsKey]) {
         NSAlert *alert = [[NSAlert alloc] init];
         alert.alertStyle = NSAlertStyleInformational;
-        alert.messageText = @"Disable AWDL while Artemis is open?";
-        alert.informativeText = @"This removes a common cause of Wi-Fi lag spikes. While Artemis is open, AirDrop, Handoff, Universal Control, Sidecar, AirPlay to this Mac and Apple Watch unlock won't work. Everything comes back when Artemis quits.\n\n"
+        alert.messageText = @"Disable AWDL while ArtemisMac is open?";
+        alert.informativeText = @"This removes a common cause of Wi-Fi lag spikes. While ArtemisMac is open, AirDrop, Handoff, Universal Control, Sidecar, AirPlay to this Mac and Apple Watch unlock won't work. Everything comes back when ArtemisMac quits.\n\n"
                                 @"Turning AWDL off needs a small helper that runs with administrator rights. The first time, macOS asks you to allow it in System Settings › General › Login Items.";
         [alert addButtonWithTitle:@"Disable AWDL"];
         [alert addButtonWithTitle:@"Cancel"];
@@ -293,7 +293,7 @@ static NSString *const kAWDLExplainedDefaultsKey = @"awdlTradeoffExplained";
 - (void)viewWillAppear {
     [super viewWillAppear];
     
-    self.parentViewController.title = @"Artemis";
+    self.parentViewController.title = @"ArtemisMac";
     self.parentViewController.view.window.subtitle = [Helpers versionNumberString];
 
     [self.parentViewController.view.window moonlight_toolbarItemForAction:@selector(addHostButtonClicked:)].enabled = YES;

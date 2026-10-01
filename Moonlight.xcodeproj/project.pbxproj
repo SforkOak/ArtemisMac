@@ -402,7 +402,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.sforkoak.artemis.mac;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				PRODUCT_MODULE_NAME = Moonlight;
-				PRODUCT_NAME = Artemis;
+				PRODUCT_NAME = ArtemisMac;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_OBJC_BRIDGING_HEADER = "Limelight/Moonlight-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
@@ -454,7 +454,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.sforkoak.artemis.mac;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				PRODUCT_MODULE_NAME = Moonlight;
-				PRODUCT_NAME = Artemis;
+				PRODUCT_NAME = ArtemisMac;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_OBJC_BRIDGING_HEADER = "Limelight/Moonlight-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;

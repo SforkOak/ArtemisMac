@@ -38,7 +38,7 @@
                                     <constraints>
                                         <constraint firstAttribute="width" constant="272" id="T0R-s6-O3u"/>
                                     </constraints>
-                                    <textFieldCell key="cell" lineBreakMode="clipping" alignment="center" title="Artemis" id="1dj-Bs-JF3">
+                                    <textFieldCell key="cell" lineBreakMode="clipping" alignment="center" title="ArtemisMac" id="1dj-Bs-JF3">
                                         <font key="font" metaFont="systemBold" size="36"/>
                                         <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
                                         <color key="backgroundColor" name="textBackgroundColor" catalog="System" colorSpace="catalog"/>

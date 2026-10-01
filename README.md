@@ -1,4 +1,4 @@
-# Artemis for macOS
+# ArtemisMac
 
 A native AppKit client for [Apollo](https://github.com/ClassicOldSong/Apollo) and Sunshine hosts, built for the lowest latency possible on Apple Silicon Macs. It brings the Apollo features of [Artemis Android](https://github.com/ClassicOldSong/moonlight-android) to the Mac, on top of [Moonlight for macOS](https://github.com/MichaelMKenny/moonlight-macos).
 
@@ -21,7 +21,7 @@ Requires macOS 26 and an Apple Silicon Mac. AV1 needs an M3 or newer.
 - **Audio**: a HAL AudioUnit with a 5 ms device buffer and at most 30 ms queued, so audio can't drift behind the video.
 - **Mouse**: raw, unaccelerated GameController input handled off the main thread, with sub-pixel precision.
 - **System**: Game Mode in fullscreen, a latency-critical process activity while streaming, and user-interactive scheduling for the streaming threads.
-- **Wi-Fi**: a 20 ms keepalive (Apollo) keeps the radio out of power save. **Disable AWDL while Artemis is open** (at the bottom of the host list) stops the AirDrop/Handoff link from making the radio hop channels. See below.
+- **Wi-Fi**: a 20 ms keepalive (Apollo) keeps the radio out of power save. **Disable AWDL while ArtemisMac is open** (at the bottom of the host list) stops the AirDrop/Handoff link from making the radio hop channels. See below.
 - **Resolution**: *Match Display* streams at this Mac's fullscreen size below the notch, in panel pixels.
 - **Measuring**: Ctrl-Opt-Cmd-S shows host encode, network, decode and on-screen latency. A summary is also logged every 5 seconds:
   ```sh
@@ -32,15 +32,15 @@ Requires macOS 26 and an Apple Silicon Mac. AV1 needs an M3 or newer.
 
 AWDL (`awdl0`) is the peer-to-peer Wi-Fi link behind AirDrop, Handoff, Universal Control, Sidecar and AirPlay to the Mac. It makes the Wi-Fi radio hop channels, which shows up as periodic latency spikes while streaming.
 
-Turning AWDL off needs root, so Artemis bundles a small privileged helper (`ArtemisAWDLHelper`), registered with `SMAppService`.
-- **First use**: the first time you turn the switch on, macOS asks you to allow Artemis in **System Settings › General › Login Items › Allow in the Background**.
-- **What it can do**: the helper only keeps `awdl0` down while Artemis asks it to, and puts it back down when macOS brings it up again.
-- **Who can use it**: it only accepts connections from Artemis signed by the same team.
-- **Always restored**: when Artemis quits or crashes, the helper restores AWDL.
+Turning AWDL off needs root, so ArtemisMac bundles a small privileged helper (`ArtemisAWDLHelper`), registered with `SMAppService`.
+- **First use**: the first time you turn the switch on, macOS asks you to allow ArtemisMac in **System Settings › General › Login Items › Allow in the Background**.
+- **What it can do**: the helper only keeps `awdl0` down while ArtemisMac asks it to, and puts it back down when macOS brings it up again.
+- **Who can use it**: it only accepts connections from ArtemisMac signed by the same team.
+- **Always restored**: when ArtemisMac quits or crashes, the helper restores AWDL.
 
-To remove the helper: `Artemis.app/Contents/MacOS/Artemis --unregister-awdl-helper`.
+To remove the helper: `ArtemisMac.app/Contents/MacOS/ArtemisMac --unregister-awdl-helper`.
 
-Because a sandboxed app can only register sandboxed helpers, Artemis doesn't use the App Sandbox. Its data lives in `~/Library/Application Support/Artemis`.
+Because a sandboxed app can only register sandboxed helpers, ArtemisMac doesn't use the App Sandbox. Its data lives in `~/Library/Application Support/Artemis`.
 
 ## Shortcuts
 
