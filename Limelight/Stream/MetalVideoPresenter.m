@@ -12,6 +12,7 @@
 #include <stdatomic.h>
 
 #include "Limelight.h"
+#include "ColorConversion.h"
 
 // Draws a decoded bi-planar Y'CbCr frame (NV12 or P010). Compiled at runtime with
 // newLibraryWithSource:, so building the app doesn't need Xcode's separate Metal toolchain.
@@ -19,7 +20,7 @@ static NSString *const kVideoShaderSource = @
     "#include <metal_stdlib>\n"
     "using namespace metal;\n"
     "\n"
-    "// Must match ArtemisCscParams\n"
+    "// Must match ArtemisCscParams in ColorConversion.h\n"
     "struct CscParams {\n"
     "    float4 row0;     // R = dot(row0.xyz, yuv - offsets)\n"
     "    float4 row1;     // G\n"
@@ -60,60 +61,6 @@ static NSString *const kVideoShaderSource = @
     "                        dot(yuv, csc.row2.xyz));\n"
     "    return float4(saturate(rgb), 1.0);\n"
     "}\n";
-
-// Must match CscParams in kVideoShaderSource
-typedef struct {
-    simd_float4 row0;
-    simd_float4 row1;
-    simd_float4 row2;
-    simd_float4 offsets;
-} ArtemisCscParams;
-
-// Y'CbCr -> RGB for a colorspace, range and bit depth, as sampled from an R8/RG8 or
-// MSB-aligned R16/RG16 (P010) texture
-static ArtemisCscParams MakeCscParams(int colorspace, BOOL fullRange, int bitDepth) {
-    double kr, kb;
-    switch (colorspace) {
-        case COLORSPACE_REC_601:
-            kr = 0.299;  kb = 0.114;
-            break;
-        case COLORSPACE_REC_2020:
-            kr = 0.2627; kb = 0.0593;
-            break;
-        case COLORSPACE_REC_709:
-        default:
-            kr = 0.2126; kb = 0.0722;
-            break;
-    }
-    double kg = 1.0 - kr - kb;
-
-    // Size of one code value in normalized texture units. 10-bit P010 samples sit in the
-    // top bits of 16-bit words.
-    double unit = bitDepth > 8 ? 64.0 / 65535.0 : 1.0 / 255.0;
-    int shift = bitDepth - 8;
-    double yOffset, yRange, cOffset, cRange;
-    if (fullRange) {
-        yOffset = 0;
-        yRange = ((1 << bitDepth) - 1) * unit;
-        cOffset = (1 << (bitDepth - 1)) * unit;
-        cRange = ((1 << bitDepth) - 1) * unit;
-    } else {
-        yOffset = (16 << shift) * unit;
-        yRange = (219 << shift) * unit;
-        cOffset = (128 << shift) * unit;
-        cRange = (224 << shift) * unit;
-    }
-    double ys = 1.0 / yRange;
-    double cs = 1.0 / cRange;
-
-    ArtemisCscParams p;
-    p.row0 = simd_make_float4(ys, 0.0, 2.0 * (1.0 - kr) * cs, 0.0);
-    p.row1 = simd_make_float4(ys, -2.0 * kb * (1.0 - kb) / kg * cs, -2.0 * kr * (1.0 - kr) / kg * cs, 0.0);
-    p.row2 = simd_make_float4(ys, 2.0 * (1.0 - kb) * cs, 0.0, 0.0);
-    p.offsets = simd_make_float4(yOffset, cOffset, cOffset, 0.0);
-    return p;
-}
-
 
 #pragma mark - Metal view
 
@@ -535,7 +482,7 @@ static ArtemisCscParams MakeCscParams(int colorspace, BOOL fullRange, int bitDep
     // Crop decoder padding: sample only the part of the buffer that holds the picture
     simd_float2 texScale = simd_make_float2(MIN(1.0, videoWidth / CVPixelBufferGetWidth(frame)),
                                             MIN(1.0, videoHeight / CVPixelBufferGetHeight(frame)));
-    ArtemisCscParams csc = MakeCscParams([self colorspaceOfFrame:frame], fullRange, tenBit ? 10 : 8);
+    ArtemisCscParams csc = ArtemisMakeCscParams([self colorspaceOfFrame:frame], fullRange, tenBit ? 10 : 8);
 
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = drawable.texture;

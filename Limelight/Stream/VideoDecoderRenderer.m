@@ -8,6 +8,7 @@
 
 #import "VideoDecoderRenderer.h"
 #import "MetalVideoPresenter.h"
+#include "VideoBitstream.h"
 
 #import <os/lock.h>
 #import <simd/simd.h>
@@ -31,7 +32,7 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
 
 // Frames in flight inside VideoToolbox are far fewer than this
 #define TIMING_SLOTS 64
-#define NAL_LENGTH_PREFIX_SIZE 4
+#define NAL_LENGTH_PREFIX_SIZE ARTEMIS_NAL_LENGTH_PREFIX_SIZE
 
 static void DecompressionOutputCallback(void *decompressionOutputRefCon,
                                         void *sourceFrameRefCon,
@@ -40,7 +41,6 @@ static void DecompressionOutputCallback(void *decompressionOutputRefCon,
                                         CVImageBufferRef imageBuffer,
                                         CMTime presentationTimeStamp,
                                         CMTime presentationDuration);
-static uint8_t *AnnexBToLengthPrefixed(const uint8_t *data, size_t length, size_t *outLength);
 
 @implementation VideoDecoderRenderer {
     MetalVideoPresenter *_presenter;
@@ -167,7 +167,7 @@ static uint8_t *AnnexBToLengthPrefixed(const uint8_t *data, size_t length, size_
     uint8_t *sampleData = picData;
     size_t sampleLength = picLength;
     if (_videoFormat & (VIDEO_FORMAT_MASK_H264 | VIDEO_FORMAT_MASK_H265)) {
-        sampleData = AnnexBToLengthPrefixed(picData, picLength, &sampleLength);
+        sampleData = ArtemisAnnexBToLengthPrefixed(picData, picLength, &sampleLength);
         free(picData);
         if (sampleData == NULL) {
             return DR_NEED_IDR;
@@ -292,57 +292,6 @@ static void DecompressionOutputCallback(void *decompressionOutputRefCon,
         _session = NULL;
     }
 }
-
-// Converts Annex B NAL units (start codes) to 4-byte length-prefixed NAL units.
-// Returns a malloc'd buffer, or NULL on allocation failure.
-static size_t AppendLengthPrefixedNal(uint8_t *out, size_t outPos, const uint8_t *nal, size_t nalLength) {
-    out[outPos++] = (uint8_t)(nalLength >> 24);
-    out[outPos++] = (uint8_t)(nalLength >> 16);
-    out[outPos++] = (uint8_t)(nalLength >> 8);
-    out[outPos++] = (uint8_t)nalLength;
-    memcpy(&out[outPos], nal, nalLength);
-    return outPos + nalLength;
-}
-
-static uint8_t *AnnexBToLengthPrefixed(const uint8_t *data, size_t length, size_t *outLength) {
-    // Every 3-byte start code becomes a 4-byte length, so the output grows by at most one byte per NAL
-    size_t nalCount = 0;
-    for (size_t i = 0; i + 2 < length; i++) {
-        if (data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1) {
-            nalCount++;
-            i += 2;
-        }
-    }
-
-    uint8_t *out = malloc(length + nalCount + NAL_LENGTH_PREFIX_SIZE);
-    if (out == NULL) {
-        return NULL;
-    }
-
-    // A 4-byte start code's leading zero ends up as a trailing zero of the previous NAL,
-    // which decoders ignore (moonlight-ios does the same)
-    size_t outPos = 0;
-    size_t nalStart = SIZE_MAX;
-    size_t i = 0;
-    while (i + 2 < length) {
-        if (data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1) {
-            if (nalStart != SIZE_MAX) {
-                outPos = AppendLengthPrefixedNal(out, outPos, &data[nalStart], i - nalStart);
-            }
-            nalStart = i + 3;
-            i += 3;
-        } else {
-            i++;
-        }
-    }
-    if (nalStart != SIZE_MAX && nalStart < length) {
-        outPos = AppendLengthPrefixedNal(out, outPos, &data[nalStart], length - nalStart);
-    }
-
-    *outLength = outPos;
-    return out;
-}
-
 
 #pragma mark - Format descriptions
 
