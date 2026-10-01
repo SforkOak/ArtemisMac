@@ -661,6 +661,7 @@ static NSString *const kShowStatsDefaultsKey = @"showStreamStats";
     StreamConfiguration *streamConfig = [[StreamConfiguration alloc] init];
     
     streamConfig.host = self.app.host.activeAddress;
+    streamConfig.hostUUID = self.app.host.uuid;
     streamConfig.appID = self.app.id;
     streamConfig.appUUID = self.app.uuid;
     streamConfig.appName = self.app.name;

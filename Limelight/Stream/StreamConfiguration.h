@@ -9,6 +9,7 @@
 @interface StreamConfiguration : NSObject
 
 @property NSString* host;
+@property NSString* hostUUID;
 @property NSString* appVersion;
 @property NSString* gfeVersion;
 @property NSString* appID;

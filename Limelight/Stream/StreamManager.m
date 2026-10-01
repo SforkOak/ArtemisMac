@@ -89,6 +89,10 @@
     // Populate RTSP session URL from launch/resume response
     _config.rtspSessionUrl = sessionUrl;
 
+    if (![serverState hasSuffix:@"_SERVER_BUSY"] && _config.hostUUID != nil) {
+        [StreamManager recordLaunchedSession:_config];
+    }
+
 #if TARGET_OS_IPHONE
     // Set mouse delta factors from the screen resolution and stream size
     CGFloat screenScale = [[UIScreen mainScreen] scale];
@@ -110,6 +114,32 @@
         NSOperationQueue* opQueue = [[NSOperationQueue alloc] init];
         [opQueue addOperation:self->_connection];
     });
+}
+
+static NSString *const kLaunchedSessionsKey = @"launchedSessions";
+
++ (void) recordLaunchedSession:(StreamConfiguration*)config {
+    NSMutableDictionary *sessions = [[NSUserDefaults.standardUserDefaults dictionaryForKey:kLaunchedSessionsKey] mutableCopy] ?: [NSMutableDictionary dictionary];
+    sessions[config.hostUUID] = @{
+        @"width": @(config.width),
+        @"height": @(config.height),
+        @"fps": @(config.frameRate),
+        @"virtualDisplay": @(config.useVirtualDisplay),
+        @"appId": config.appID ?: @"",
+    };
+    [NSUserDefaults.standardUserDefaults setObject:sessions forKey:kLaunchedSessionsKey];
+}
+
++ (NSDictionary *) launchedSessionForHost:(NSString *)hostUUID {
+    return [NSUserDefaults.standardUserDefaults dictionaryForKey:kLaunchedSessionsKey][hostUUID];
+}
+
++ (void) forgetLaunchedSessionForHost:(NSString *)hostUUID {
+    NSMutableDictionary *sessions = [[NSUserDefaults.standardUserDefaults dictionaryForKey:kLaunchedSessionsKey] mutableCopy];
+    if (sessions[hostUUID] != nil) {
+        [sessions removeObjectForKey:hostUUID];
+        [NSUserDefaults.standardUserDefaults setObject:sessions forKey:kLaunchedSessionsKey];
+    }
 }
 
 - (void) stopStream

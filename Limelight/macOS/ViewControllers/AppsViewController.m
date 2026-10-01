@@ -12,6 +12,7 @@
 #import "AppCellView.h"
 #import "AlertPresenter.h"
 #import "StreamViewController.h"
+#import "StreamManager.h"
 #import "NSWindow+Moonlight.h"
 #import "NSCollectionView+Moonlight.h"
 #import "NSApplication+Moonlight.h"
@@ -348,6 +349,33 @@ const CGFloat scaleBase = 1.125;
     }
     self.launchInVirtualDisplay = useVirtualDisplay;
 
+    // Resuming keeps the resolution the session was launched with. If the settings
+    // have changed since, offer to restart it so the host matches.
+    if (self.runningApp != nil && app == self.runningApp) {
+        NSString *mismatch = [self sessionMismatchForResumingApp:app useVirtualDisplay:useVirtualDisplay];
+        if (mismatch != nil) {
+            NSAlert *alert = [[NSAlert alloc] init];
+            alert.alertStyle = NSAlertStyleInformational;
+            alert.messageText = [NSString stringWithFormat:@"Restart %@ to apply your settings?", app.name];
+            alert.informativeText = [NSString stringWithFormat:@"%@ Resuming keeps the old settings, which can leave black borders around the picture.", mismatch];
+            [alert addButtonWithTitle:@"Restart"];
+            [alert addButtonWithTitle:@"Resume Anyway"];
+            [alert addButtonWithTitle:@"Cancel"];
+            NSModalResponse response = [alert runModal];
+            if (response == NSAlertFirstButtonReturn) {
+                [self quitApp:app completion:^(BOOL success) {
+                    if (success) {
+                        self.runningApp = app;
+                        [self performSegueWithIdentifier:@"streamSegue" sender:nil];
+                    }
+                }];
+                return;
+            } else if (response != NSAlertSecondButtonReturn) {
+                return;
+            }
+        }
+    }
+
     if (self.runningApp != nil && app != self.runningApp) {
         if ([self askWhetherToStopRunningApp:self.runningApp andStartNewApp:app]) {
             [self quitApp:self.runningApp completion:^(BOOL success) {
@@ -361,6 +389,26 @@ const CGFloat scaleBase = 1.125;
         self.runningApp = app;
         [self performSegueWithIdentifier:@"streamSegue" sender:nil];
     }
+}
+
+// Describes how the running session differs from the current settings, or nil if it matches
+- (NSString *)sessionMismatchForResumingApp:(TemporaryApp *)app useVirtualDisplay:(BOOL)useVirtualDisplay {
+    NSDictionary *session = [StreamManager launchedSessionForHost:app.host.uuid];
+    if (session == nil || ![session[@"appId"] isEqualToString:app.id]) {
+        return nil;
+    }
+
+    struct Resolution resolution = [StreamViewController getResolution];
+    int width = [session[@"width"] intValue];
+    int height = [session[@"height"] intValue];
+    if (width != resolution.width || height != resolution.height) {
+        return [NSString stringWithFormat:@"It's running at %d×%d, but you've chosen %d×%d.", width, height, resolution.width, resolution.height];
+    }
+    if ([session[@"virtualDisplay"] boolValue] != useVirtualDisplay) {
+        return useVirtualDisplay ? @"It's running on the host's display, but you've chosen a virtual display."
+                                 : @"It's running on a virtual display, but you've chosen the host's display.";
+    }
+    return nil;
 }
 
 - (void)quitApp:(TemporaryApp *)app completion:(void (^)(BOOL success))completion {
@@ -392,6 +440,7 @@ const CGFloat scaleBase = 1.125;
                 }
             } else {
                 self.runningApp = nil;
+                [StreamManager forgetLaunchedSessionForHost:app.host.uuid];
                 
                 if (completion != nil) {
                     completion(YES);

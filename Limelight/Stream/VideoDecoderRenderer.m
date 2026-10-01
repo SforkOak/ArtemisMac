@@ -13,11 +13,15 @@
 #import <simd/simd.h>
 #include <stdatomic.h>
 
+// FFmpeg's private CBS headers aren't written for -Wdocumentation
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdocumentation"
 #include <libavcodec/avcodec.h>
 #include <libavcodec/cbs.h>
 #include <libavcodec/cbs_av1.h>
 #include <libavformat/avio.h>
 #include <libavutil/mem.h>
+#pragma clang diagnostic pop
 
 @import VideoToolbox;
 

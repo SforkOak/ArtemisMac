@@ -16,6 +16,12 @@
 
 - (void) stopStream;
 
+// The resolution, FPS and display mode a host's running app was launched with, as
+// {width, height, fps, virtualDisplay, appId}, or nil if unknown. Resuming keeps these
+// (Apollo doesn't resize the session), so callers can offer to restart instead.
++ (NSDictionary *)launchedSessionForHost:(NSString *)hostUUID;
++ (void)forgetLaunchedSessionForHost:(NSString *)hostUUID;
+
 // Latency statistics for the running stream (nil until the stream starts)
 @property (atomic, readonly, strong) VideoStats* videoStats;
 
