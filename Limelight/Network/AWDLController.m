@@ -24,6 +24,8 @@ static NSString *const kHelperRequirement =
     NSXPCConnection *_connection;
     NSTimer *_pollTimer;
     BOOL _helperSuppressing;
+    // As of the last refresh
+    SMAppServiceStatus _helperStatus;
     NSString *_lastError;
 }
 
@@ -100,7 +102,10 @@ static NSString *const kHelperRequirement =
 }
 
 - (void)refresh {
-    if (self.suppressionEnabled && !_helperSuppressing && [self helperService].status == SMAppServiceStatusEnabled) {
+    BOOL wanted = self.suppressionEnabled;
+    // Ask smd once per poll, and only when it matters; each query is an XPC round trip
+    _helperStatus = wanted ? [self helperService].status : SMAppServiceStatusNotRegistered;
+    if (wanted && !_helperSuppressing && _helperStatus == SMAppServiceStatusEnabled) {
         [self tellHelperToSuppress:YES];
     }
     [self updateState];
@@ -197,8 +202,8 @@ static BOOL IsAWDLUp(void) {
 
 - (void)updateState {
     BOOL wanted = self.suppressionEnabled;
-    // Only ask about the helper when it matters; each query is an XPC round trip to smd
-    SMAppServiceStatus status = wanted ? [self helperService].status : SMAppServiceStatusNotRegistered;
+    // Not queried again here; the XPC replies land between polls and can use the last answer
+    SMAppServiceStatus status = _helperStatus;
     BOOL up = IsAWDLUp();
 
     ArtemisAWDLState state;
