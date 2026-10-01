@@ -14,9 +14,16 @@
 
 // Wi-Fi delivers audio in clumps (scans, AWDL, busy airtime). Clumps are absorbed rather
 // than dropped, then the queue is trimmed back down: once per window, the smallest
-// cushion the output device actually needed is measured, and anything above
-// TARGET_SLACK_MS is removed by dropping a decoded packet now and then.
-#define TARGET_SLACK_MS 5
+// cushion the output device actually needed is measured, and anything above the target
+// is removed by dropping a decoded packet now and then.
+// The target starts at the minimum and grows after each underrun, so during a bad patch
+// the cushion the gaps built up is kept instead of trimmed away to run dry again. It
+// shrinks slowly once the underruns stop, so on good Wi-Fi it stays at the minimum.
+#define TARGET_SLACK_MIN_MS 5
+#define TARGET_SLACK_MAX_MS 30
+#define TARGET_SLACK_GROWTH_MS 5                // per underrun
+#define TARGET_SLACK_DECAY_MS 1                 // per interval without an underrun
+#define TARGET_SLACK_DECAY_INTERVAL_MS 10000
 #define TRIM_WINDOW_MS 1000
 // At most one trimmed packet per this many, so trimming is spread out
 #define TRIM_SPACING_PACKETS 8
@@ -42,7 +49,6 @@ static int16_t *sDecodeBuffer;
 static int16_t *sRing;
 static uint32_t sRingFrames;
 static uint32_t sMaxQueuedFrames;
-static uint32_t sTargetSlackFrames;
 static uint32_t sSilenceGapFrames;
 static _Atomic uint64_t sWritePos;
 static _Atomic uint64_t sReadPos;
@@ -57,11 +63,15 @@ static _Atomic uint32_t sMinSlackFrames = UINT32_MAX;
 // Trimming state (audio receive thread only)
 static uint64_t sTrimWindowTicks;
 static uint64_t sTrimHoldTicks;
+static uint64_t sTargetSlackDecayTicks;
 static uint64_t sTrimWindowStart;
 static uint64_t sTrimHoldUntil;
+static uint64_t sTargetSlackDecayAt;
 static uint32_t sTrimBudgetFrames;
 static uint32_t sPacketsSinceTrim;
 static uint32_t sUnderrunsSeen;
+// Written by the audio receive thread, also read by the stats
+static _Atomic uint32_t sTargetSlackFrames;
 
 // Diagnostics. Each counter has a single writer; the stats reader may race a window
 // reset with an update, which at worst carries one value into the next window.
@@ -74,6 +84,10 @@ static _Atomic uint32_t sWindowMaxQueuedFrames;
 static _Atomic uint32_t sWindowMaxCallbackFrames;
 static _Atomic uint64_t sWindowMaxCallbackGap;   // host time units
 static _Atomic uint64_t sLastCallbackHostTime;
+
+static inline uint32_t FramesForMs(uint32_t ms) {
+    return (uint32_t)sSampleRate * ms / 1000;
+}
 
 static inline void StoreMax32(_Atomic uint32_t *value, uint32_t candidate) {
     if (candidate > atomic_load_explicit(value, memory_order_relaxed)) {
@@ -181,22 +195,25 @@ int ArtemisAudioInit(POPUS_MULTISTREAM_CONFIGURATION originalConfig) {
 
     sRingFrames = (uint32_t)(sSampleRate * RING_MS / 1000);
     sMaxQueuedFrames = (uint32_t)(sSampleRate * MAX_QUEUED_MS / 1000);
-    sTargetSlackFrames = (uint32_t)(sSampleRate * TARGET_SLACK_MS / 1000);
     sSilenceGapFrames = (uint32_t)(sSampleRate * SILENCE_GAP_MS / 1000);
     sRing = calloc((size_t)sRingFrames * sChannels, sizeof(int16_t));
     sDecodeBuffer = calloc((size_t)sSamplesPerFrame * sChannels, sizeof(int16_t));
     atomic_store(&sWritePos, 0);
     atomic_store(&sReadPos, 0);
 
-    // The output unit isn't running yet, so the render thread's state can be reset here too
-    sGapFrames = 0;
+    // The output unit isn't running yet, so the render thread's state can be reset here too.
+    // Start as if in a long silence, so waiting for the first packet isn't an underrun.
+    sGapFrames = sSilenceGapFrames + 1;
     atomic_store(&sMinSlackFrames, UINT32_MAX);
     mach_timebase_info_data_t timebase;
     mach_timebase_info(&timebase);
     sTrimWindowTicks = (uint64_t)TRIM_WINDOW_MS * NSEC_PER_MSEC * timebase.denom / timebase.numer;
     sTrimHoldTicks = (uint64_t)TRIM_HOLD_AFTER_UNDERRUN_MS * NSEC_PER_MSEC * timebase.denom / timebase.numer;
+    sTargetSlackDecayTicks = (uint64_t)TARGET_SLACK_DECAY_INTERVAL_MS * NSEC_PER_MSEC * timebase.denom / timebase.numer;
     sTrimWindowStart = mach_absolute_time();
     sTrimHoldUntil = 0;
+    sTargetSlackDecayAt = 0;
+    atomic_store(&sTargetSlackFrames, FramesForMs(TARGET_SLACK_MIN_MS));
     sTrimBudgetFrames = 0;
     sPacketsSinceTrim = 0;
     sUnderrunsSeen = 0;
@@ -270,8 +287,8 @@ int ArtemisAudioInit(POPUS_MULTISTREAM_CONFIGURATION originalConfig) {
     UInt32 actualFrames = 0;
     UInt32 size = sizeof(actualFrames);
     AudioUnitGetProperty(sOutputUnit, kAudioDevicePropertyBufferFrameSize, kAudioUnitScope_Global, 0, &actualFrames, &size);
-    Log(LOG_I, @"Audio: %d channels at %d Hz, %d-sample packets, device buffer %u frames, target cushion %d ms, max queue %d ms",
-        sChannels, sSampleRate, sSamplesPerFrame, actualFrames, TARGET_SLACK_MS, MAX_QUEUED_MS);
+    Log(LOG_I, @"Audio: %d channels at %d Hz, %d-sample packets, device buffer %u frames, target cushion %d–%d ms, max queue %d ms",
+        sChannels, sSampleRate, sSamplesPerFrame, actualFrames, TARGET_SLACK_MIN_MS, TARGET_SLACK_MAX_MS, MAX_QUEUED_MS);
     return 0;
 }
 
@@ -292,27 +309,38 @@ void ArtemisAudioCleanup(void) {
     sDecodeBuffer = NULL;
 }
 
-// Audio receive thread. Once per window, works out how much queued audio the output
-// never needed, which becomes the amount to trim during the next window.
+// Audio receive thread. Adjusts the target cushion, and once per window works out how
+// much queued audio the output never needed, which becomes the amount to trim during
+// the next window.
 static void UpdateTrimBudget(void) {
     uint64_t now = mach_absolute_time();
     uint32_t underruns = atomic_load_explicit(&sUnderruns, memory_order_relaxed);
+    uint32_t target = atomic_load_explicit(&sTargetSlackFrames, memory_order_relaxed);
     if (underruns != sUnderrunsSeen) {
-        // The output ran dry, so keep the cushion that has built up for a while
+        // The output ran dry, so keep the cushion that has built up for a while, and
+        // aim for a bigger one from now on
+        target = MIN(target + (underruns - sUnderrunsSeen) * FramesForMs(TARGET_SLACK_GROWTH_MS),
+                     FramesForMs(TARGET_SLACK_MAX_MS));
         sUnderrunsSeen = underruns;
         sTrimHoldUntil = now + sTrimHoldTicks;
+        sTargetSlackDecayAt = now + sTargetSlackDecayTicks;
         sTrimBudgetFrames = 0;
+    } else if (now >= sTargetSlackDecayAt && target > FramesForMs(TARGET_SLACK_MIN_MS)) {
+        target = MAX(target - FramesForMs(TARGET_SLACK_DECAY_MS), FramesForMs(TARGET_SLACK_MIN_MS));
+        sTargetSlackDecayAt = now + sTargetSlackDecayTicks;
     }
+    atomic_store_explicit(&sTargetSlackFrames, target, memory_order_relaxed);
+
     if (now - sTrimWindowStart < sTrimWindowTicks) {
         return;
     }
     sTrimWindowStart = now;
 
     uint32_t minSlack = atomic_exchange_explicit(&sMinSlackFrames, UINT32_MAX, memory_order_relaxed);
-    if (now < sTrimHoldUntil || minSlack == UINT32_MAX || minSlack <= sTargetSlackFrames) {
+    if (now < sTrimHoldUntil || minSlack == UINT32_MAX || minSlack <= target) {
         sTrimBudgetFrames = 0;
     } else {
-        sTrimBudgetFrames = minSlack - sTargetSlackFrames;
+        sTrimBudgetFrames = minSlack - target;
     }
 }
 
@@ -391,6 +419,7 @@ void ArtemisAudioTakeStats(ArtemisAudioStats *stats) {
     stats->underrunMs = (uint32_t)(atomic_load(&sUnderrunFrames) * 1000 / sSampleRate);
     stats->overflowDrops = atomic_load(&sOverflowDrops);
     stats->trimmedPackets = atomic_load(&sTrimmedPackets);
+    stats->targetCushionMs = atomic_load(&sTargetSlackFrames) * 1000 / sSampleRate;
 
     uint32_t minFrames = atomic_exchange(&sWindowMinQueuedFrames, UINT32_MAX);
     stats->minQueuedMs = minFrames == UINT32_MAX ? 0 : minFrames * 1000 / sSampleRate;

@@ -4,8 +4,9 @@
 //
 //  Low-latency audio output: Opus is decoded on moonlight-common-c's audio thread into
 //  a lock-free ring buffer that a HAL AudioUnit drains with a ~5 ms device buffer.
-//  Bursts from the network are absorbed, then the queue is trimmed back to ~5 ms of
-//  cushion, so audio can't drift behind the video.
+//  Bursts from the network are absorbed, then the queue is trimmed back to a 5 ms
+//  cushion, so audio can't drift behind the video. The cushion grows (up to 30 ms) after
+//  underruns and shrinks again once they stop.
 //
 
 #import <Foundation/Foundation.h>
@@ -34,6 +35,8 @@ typedef struct {
     uint32_t underrunMs;          // total silence padded during those
     uint32_t overflowDrops;       // packets dropped because the queue hit its limit
     uint32_t trimmedPackets;      // packets skipped to bring the queue back down
+    // Right now
+    uint32_t targetCushionMs;     // what the queue is trimmed down to; grows after underruns
     // Since the previous call
     uint32_t minQueuedMs;         // queue level seen by the render callback
     uint32_t maxQueuedMs;
