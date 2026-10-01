@@ -515,7 +515,7 @@ static NSString *const kShowStatsDefaultsKey = @"showStreamStats";
         @"Client total %5.1f ms (max %.1f)\n"
         @"Audio queue  %5u ms (%u–%u)\n"
         @"Audio        %u underruns (%u ms), %u trimmed, %u dropped, pull ≤%u frames, gap ≤%.1f ms\n"
-        @"Frames %u in, %u shown, %u lost, %u dropped, %u skipped, %u not displayed",
+        @"Frames %u in, %u shown, %u lost, %u dropped, %u skipped, %u not displayed, %u keep-alive",
         videoStats.streamDescription ?: @"",
         s.rttMs, s.rttVarianceMs,
         s.hostLatencyMs, s.networkReceiveMs + s.queueDelayMs, s.decodeMs,
@@ -523,7 +523,7 @@ static NSString *const kShowStatsDefaultsKey = @"showStreamStats";
         s.clientTotalMs, s.maxClientTotalMs,
         ArtemisAudioQueuedMs(), audio.minQueuedMs, audio.maxQueuedMs,
         audio.underruns, audio.underrunMs, audio.trimmedPackets, audio.overflowDrops, audio.maxCallbackFrames, audio.maxCallbackGapMs,
-        s.framesReceived, s.framesPresented, s.framesLostInNetwork, s.framesDroppedByDecoder, s.framesSuperseded, s.framesNotDisplayed];
+        s.framesReceived, s.framesPresented, s.framesLostInNetwork, s.framesDroppedByDecoder, s.framesSuperseded, s.framesNotDisplayed, s.keepAlivePresents];
 
     if (self.statsOverlay != nil && !self.statsOverlay.hidden) {
         self.statsOverlay.stringValue = text;

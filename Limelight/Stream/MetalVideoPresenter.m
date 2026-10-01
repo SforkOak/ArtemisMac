@@ -154,6 +154,15 @@ static NSString *const kVideoShaderSource = @
     atomic_bool _stopping;
     dispatch_semaphore_t _threadExited;
     CAMetalDisplayLink *_displayLink;
+
+    // Keep-alive (v-sync off, windowed). _keepAliveWanted and _windowed are main thread only;
+    // the render thread follows _keepAliveActive.
+    CAMetalLayer *_keepAliveLayer;
+    uint64_t _keepAliveIntervalUs;
+    uint64_t _nextKeepAliveUs;
+    BOOL _keepAliveWanted;
+    BOOL _windowed;
+    atomic_bool _keepAliveActive;
 }
 
 - (instancetype)initWithContainerView:(NSView *)containerView stats:(VideoStats *)stats {
@@ -191,6 +200,23 @@ static NSString *const kVideoShaderSource = @
     _layer = _view.metalLayer;
     [self configureLayerForHdr:NO];
 
+    // A transparent pixel in the bottom-left corner, presented by the keep-alive
+    _keepAliveLayer = [CAMetalLayer layer];
+    _keepAliveLayer.device = _device;
+    _keepAliveLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    _keepAliveLayer.framebufferOnly = YES;
+    _keepAliveLayer.opaque = NO;
+    _keepAliveLayer.displaySyncEnabled = NO;
+    _keepAliveLayer.frame = CGRectMake(0, 0, 1, 1);
+    _keepAliveLayer.drawableSize = CGSizeMake(2, 2);
+    NSScreen *screen = containerView.window.screen ?: NSScreen.mainScreen;
+    _keepAliveIntervalUs = (uint64_t)((screen.minimumRefreshInterval > 0 ? screen.minimumRefreshInterval : 1.0 / 60) * 1e6);
+    _windowed = (containerView.window.styleMask & NSWindowStyleMaskFullScreen) == 0;
+    for (NSNotificationName name in @[NSWindowWillEnterFullScreenNotification, NSWindowDidExitFullScreenNotification,
+                                      NSWindowDidChangeOcclusionStateNotification]) {
+        [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(windowStateChanged:) name:name object:nil];
+    }
+
     return self;
 }
 
@@ -212,6 +238,8 @@ static NSString *const kVideoShaderSource = @
     _vsync = vsync;
     _defaultColorspace = colorspace;
     _layer.displaySyncEnabled = vsync;
+    // Every refresh, or every frame for a stream slower than the display
+    _keepAliveIntervalUs = MAX(_keepAliveIntervalUs, 1000000 / (uint64_t)MAX(frameRate, 1));
 
     NSThread *thread = [[NSThread alloc] initWithTarget:self
                                                selector:vsync ? @selector(displayLinkThreadMain) : @selector(renderThreadMain)
@@ -219,6 +247,13 @@ static NSString *const kVideoShaderSource = @
     thread.name = vsync ? @"Artemis display link" : @"Artemis render";
     thread.qualityOfService = NSQualityOfServiceUserInteractive;
     [thread start];
+
+    if (!vsync) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self->_keepAliveWanted = YES;
+            [self updateKeepAlive];
+        });
+    }
 
     Log(LOG_I, @"Video presenter started: %dx%d at %d FPS, v-sync %@", (int)videoSize.width, (int)videoSize.height, frameRate, vsync ? @"on (CAMetalDisplayLink)" : @"off (present immediately)");
 }
@@ -289,19 +324,27 @@ static NSString *const kVideoShaderSource = @
 
 - (void)renderThreadMain {
     while (!atomic_load(&_stopping)) {
-        dispatch_semaphore_wait(_frameAvailable, DISPATCH_TIME_FOREVER);
+        BOOL keepAliveDue = dispatch_semaphore_wait(_frameAvailable, [self keepAliveDeadline]) != 0;
         if (atomic_load(&_stopping)) {
             break;
         }
 
         if (![self slotHasFrame]) {
-            // A wakeup for a frame that an earlier pass already drew (or a newer one replaced)
+            // The keep-alive is due, or a wakeup for a frame that an earlier pass already drew
+            // (or a newer one replaced)
+            if (keepAliveDue && atomic_load(&_keepAliveActive)) {
+                @autoreleasepool {
+                    [self presentKeepAlive];
+                }
+                [self scheduleKeepAliveAfterNewFrame:NO];
+            }
             continue;
         }
 
         @autoreleasepool {
             [self renderLatestFrame];
         }
+        [self scheduleKeepAliveAfterNewFrame:YES];
     }
 
     dispatch_semaphore_signal(_threadExited);
@@ -344,6 +387,104 @@ static NSString *const kVideoShaderSource = @
         [self renderFrame:frame timing:&timing drawable:drawable drawableWaitUs:drawableWaitUs];
     }
     CVPixelBufferRelease(frame);
+}
+
+
+#pragma mark - Keep-alive
+
+// A windowed stream goes through WindowServer's compositor, which adds about two refreshes
+// (35-40 ms) to a present that follows a refresh without one. Sparse content (a 24-30 fps
+// video, an idle desktop) hits that on most frames. So when no new frame arrives within a
+// refresh, we present a transparent pixel instead: the compositor stays busy, and the video
+// layer's drawables stay free for the next real frame. Measured on a 60 Hz MacBook Air with
+// ~20 fps content: Present 19-23 ms -> 13-14 ms.
+
+- (dispatch_time_t)keepAliveDeadline {
+    if (!atomic_load(&_keepAliveActive)) {
+        return DISPATCH_TIME_FOREVER;
+    }
+    uint64_t now = [VideoStats nowUs];
+    return _nextKeepAliveUs > now ? dispatch_time(DISPATCH_TIME_NOW, (int64_t)((_nextKeepAliveUs - now) * NSEC_PER_USEC)) : DISPATCH_TIME_NOW;
+}
+
+// Keep-alives stay on a fixed grid from the last new frame, so timer slop can't add up to
+// a refresh without a present
+- (void)scheduleKeepAliveAfterNewFrame:(BOOL)newFrame {
+    uint64_t now = [VideoStats nowUs];
+    _nextKeepAliveUs = newFrame ? now + _keepAliveIntervalUs : _nextKeepAliveUs + _keepAliveIntervalUs;
+    if (_nextKeepAliveUs <= now) {
+        _nextKeepAliveUs = now + _keepAliveIntervalUs;
+    }
+}
+
+- (void)presentKeepAlive {
+    uint64_t start = [VideoStats nowUs];
+    id<CAMetalDrawable> drawable;
+    @autoreleasepool {
+        drawable = [_keepAliveLayer nextDrawable];
+    }
+    if (drawable == nil) {
+        return;
+    }
+
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture = drawable.texture;
+    pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+    pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
+    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+    [[commandBuffer renderCommandEncoderWithDescriptor:pass] endEncoding];
+
+    uint64_t committed = [VideoStats nowUs];
+    ArtemisPresentTiming presentTiming = { .drawableWaitUs = committed - start, .committedTimeUs = committed };
+    VideoStats *stats = _stats;
+    [drawable addPresentedHandler:^(id<MTLDrawable> presented) {
+        ArtemisPresentTiming p = presentTiming;
+        if (presented.presentedTime > 0) {
+            p.presentedTimeUs = [VideoStats microsecondsFromMediaTime:presented.presentedTime];
+        }
+        [stats recordKeepAlivePresent:&p];
+    }];
+    [commandBuffer presentDrawable:drawable];
+    [commandBuffer commit];
+}
+
+// Main thread
+- (void)windowStateChanged:(NSNotification *)notification {
+    if (notification.object != _view.window) {
+        return;
+    }
+    // Off before the full screen transition starts, so the extra layer is gone by the time it ends
+    if ([notification.name isEqualToString:NSWindowWillEnterFullScreenNotification]) {
+        _windowed = NO;
+    } else if ([notification.name isEqualToString:NSWindowDidExitFullScreenNotification]) {
+        _windowed = YES;
+    }
+    [self updateKeepAlive];
+}
+
+// Main thread. Only a windowed stream needs the keep-alive: in full screen the video layer
+// flips straight to the display ("Direct" in the Metal HUD), which stays fast with sparse
+// frames, and a second layer would force it back through the compositor.
+- (void)updateKeepAlive {
+    NSWindow *window = _view.window;
+    BOOL attach = _keepAliveWanted && _windowed;
+    BOOL active = attach && (window.occlusionState & NSWindowOcclusionStateVisible) != 0;
+
+    if (attach != (_keepAliveLayer.superlayer != nil)) {
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        if (attach) {
+            [_layer addSublayer:_keepAliveLayer];
+        } else {
+            [_keepAliveLayer removeFromSuperlayer];
+        }
+        [CATransaction commit];
+    }
+    if (atomic_exchange(&_keepAliveActive, active) != active && active) {
+        // Wake the render thread so it picks up a deadline
+        dispatch_semaphore_signal(_frameAvailable);
+    }
 }
 
 

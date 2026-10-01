@@ -7,7 +7,8 @@
 //  drawn yet and nothing ever queues up behind the display.
 //
 //  - V-sync off: a dedicated render thread draws each frame the moment it's decoded,
-//    into a CAMetalLayer with displaySyncEnabled = NO.
+//    into a CAMetalLayer with displaySyncEnabled = NO. While windowed, it also keeps the
+//    compositor busy on refreshes with no new frame (see "Keep-alive").
 //  - V-sync on: a CAMetalDisplayLink asks for a frame once per refresh, and we draw the
 //    newest frame that has arrived.
 //

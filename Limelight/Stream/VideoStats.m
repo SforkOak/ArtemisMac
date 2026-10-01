@@ -14,7 +14,7 @@ typedef struct {
     uint64_t startUs;
     int lastFrameNumber;
 
-    uint32_t received, decoded, presented, lost, decoderDropped, superseded, notDisplayed;
+    uint32_t received, decoded, presented, lost, decoderDropped, superseded, notDisplayed, keepAlive;
 
     uint64_t hostLatencySum;      // 1/10 ms
     uint32_t hostLatencyCount;
@@ -116,6 +116,7 @@ typedef struct {
     s.framesDroppedByDecoder = _current.decoderDropped;
     s.framesSuperseded = _current.superseded;
     s.framesNotDisplayed = _current.notDisplayed;
+    s.keepAlivePresents = _current.keepAlive;
     if (_current.hostLatencyCount > 0) {
         s.hostLatencyMs = _current.hostLatencySum / 10.0 / _current.hostLatencyCount;
     }
@@ -230,6 +231,15 @@ typedef struct {
         if (total > _current.clientTotalMaxUs) {
             _current.clientTotalMaxUs = total;
         }
+    }
+    os_unfair_lock_unlock(&_lock);
+}
+
+- (void)recordKeepAlivePresent:(const ArtemisPresentTiming *)p {
+    os_unfair_lock_lock(&_lock);
+    _current.keepAlive++;
+    if (_trace != NULL) {
+        fprintf(_trace, "K,0,0,0,%llu,%llu,%llu,%llu\n", p->drawableWaitUs, p->committedTimeUs, p->gpuDoneTimeUs, p->presentedTimeUs);
     }
     os_unfair_lock_unlock(&_lock);
 }

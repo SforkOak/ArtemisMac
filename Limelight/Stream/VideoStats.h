@@ -39,6 +39,7 @@ typedef struct {
     uint32_t framesDroppedByDecoder;
     uint32_t framesSuperseded;       // decoded, but a newer frame took the slot before it was drawn
     uint32_t framesNotDisplayed;     // drawn and presented, but never reached the display
+    uint32_t keepAlivePresents;      // refreshes with no new frame, filled in by the presenter's keep-alive
 
     // Averages in milliseconds (0 when nothing was measured)
     double hostLatencyMs;
@@ -73,6 +74,8 @@ typedef struct {
 - (void)recordDecoderDrop;
 - (void)recordSupersededFrame:(const ArtemisFrameTiming *)timing;
 - (void)recordPresentedFrame:(const ArtemisFrameTiming *)timing present:(const ArtemisPresentTiming *)present;
+// A present that carries no new frame (see MetalVideoPresenter). Not in the latency averages.
+- (void)recordKeepAlivePresent:(const ArtemisPresentTiming *)present;
 
 // Writes one CSV line per frame to path until the stats are reset, for offline analysis
 - (void)startTraceAtPath:(NSString *)path;
