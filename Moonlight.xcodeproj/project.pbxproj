@@ -123,6 +123,7 @@
 				macOS/Views/LinkTextField.m,
 				macOS/Views/NavigatableAlertView.m,
 				macOS/Views/StreamViewMac.m,
+				Network/AWDLController.m,
 				Network/AppAssetManager.m,
 				Network/AppAssetResponse.m,
 				Network/AppAssetRetriever.m,
@@ -222,6 +223,7 @@
 				4C7E0A771FECBFFD00684411 /* Frameworks */,
 				4C7E0A781FECBFFD00684411 /* Resources */,
 				A428584B2D50682400E39078 /* Embed Frameworks */,
+				A27E0D012EC0000200C0FFEE /* Build AWDL Helper */,
 			);
 			buildRules = (
 			);
@@ -303,6 +305,33 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		A27E0D012EC0000200C0FFEE /* Build AWDL Helper */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 0;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/Limelight/AWDLHelper/main.m",
+				"$(SRCROOT)/Limelight/AWDLHelper/ArtemisAWDLHelperProtocol.h",
+				"$(SRCROOT)/Limelight/AWDLHelper/com.sforkoak.artemis.awdl-helper.plist",
+			);
+			name = "Build AWDL Helper";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/MacOS/ArtemisAWDLHelper",
+				"$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchDaemons/com.sforkoak.artemis.awdl-helper.plist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\n# Build, bundle and sign the privileged AWDL helper registered with SMAppService\nSRC=\"${SRCROOT}/Limelight/AWDLHelper\"\nDEST=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}\"\nmkdir -p \"${DEST}/MacOS\" \"${DEST}/Library/LaunchDaemons\"\nxcrun clang -fobjc-arc -O2 -arch arm64 -mmacosx-version-min=\"${MACOSX_DEPLOYMENT_TARGET}\" -Wall -Wextra -Wno-unused-parameter -framework Foundation -o \"${DEST}/MacOS/ArtemisAWDLHelper\" \"${SRC}/main.m\"\ncp \"${SRC}/com.sforkoak.artemis.awdl-helper.plist\" \"${DEST}/Library/LaunchDaemons/\"\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" --options runtime --identifier com.sforkoak.artemis.awdl-helper --timestamp=none \"${DEST}/MacOS/ArtemisAWDLHelper\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		4C7E0A761FECBFFD00684411 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -367,6 +396,7 @@
 				MARKETING_VERSION = 1.1.0;
 				MTL_ENABLE_DEBUG_INFO = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.sforkoak.artemis;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				PRODUCT_MODULE_NAME = Moonlight;
 				PRODUCT_NAME = Artemis;
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -418,6 +448,7 @@
 				MARKETING_VERSION = 1.1.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				PRODUCT_BUNDLE_IDENTIFIER = com.sforkoak.artemis;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				PRODUCT_MODULE_NAME = Moonlight;
 				PRODUCT_NAME = Artemis;
 				PROVISIONING_PROFILE_SPECIFIER = "";

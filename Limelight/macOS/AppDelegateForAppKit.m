@@ -17,6 +17,7 @@
 #import "GeneralPrefsPaneVC.h"
 
 #import "Moonlight-Swift.h"
+#import "AWDLController.h"
 
 typedef enum : NSUInteger {
     SystemTheme,
@@ -37,6 +38,9 @@ typedef enum : NSUInteger {
     [self createMainWindow];
     
     self.controllerNavigation = [[ControllerNavigation alloc] init];
+
+    // Re-applies "Disable AWDL while Artemis is open" if it was left on
+    [[AWDLController shared] start];
 }
 
 - (void)applicationWillFinishLaunching:(NSNotification *)notification {

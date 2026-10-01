@@ -25,6 +25,7 @@
 #import "TemporaryHost.h"
 #import "DataManager.h"
 #import "PairManager.h"
+#import "AWDLController.h"
 #import "WakeOnLanManager.h"
 
 @interface HostsViewController () <NSCollectionViewDataSource, NSCollectionViewDelegate, NSSearchFieldDelegate, NSControlTextEditingDelegate, HostsViewControllerDelegate, DiscoveryCallback, PairCallback, NSMenuItemValidation>
@@ -39,6 +40,10 @@
 
 @property (nonatomic, strong) NSOperationQueue *opQueue;
 @property (nonatomic, strong) DiscoveryManager *discMan;
+
+@property (nonatomic, strong) NSSwitch *awdlSwitch;
+@property (nonatomic, strong) NSView *awdlStatusDot;
+@property (nonatomic, strong) NSTextField *awdlStatusLabel;
 
 @end
 
@@ -56,6 +61,115 @@
     self.hosts = [NSArray array];
     
     [self prepareDiscovery];
+    [self installAWDLBar];
+}
+
+
+#pragma mark - AWDL toggle
+
+static NSString *const kAWDLExplainedDefaultsKey = @"awdlTradeoffExplained";
+
+// A bar along the bottom of the host picker with the "Disable AWDL" switch and live status
+- (void)installAWDLBar {
+    NSVisualEffectView *bar = [[NSVisualEffectView alloc] init];
+    bar.material = NSVisualEffectMaterialTitlebar;
+    bar.blendingMode = NSVisualEffectBlendingModeWithinWindow;
+    bar.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSString *explanation = @"AWDL is the peer-to-peer Wi-Fi link behind AirDrop, Handoff, Universal Control, Sidecar and AirPlay to this Mac. "
+                            @"It makes the Wi-Fi radio hop channels, which causes lag spikes while streaming over Wi-Fi. "
+                            @"While it's off, those features don't work. AWDL comes back as soon as Artemis quits.";
+
+    self.awdlSwitch = [[NSSwitch alloc] init];
+    self.awdlSwitch.controlSize = NSControlSizeSmall;
+    self.awdlSwitch.target = self;
+    self.awdlSwitch.action = @selector(awdlSwitchChanged:);
+    self.awdlSwitch.toolTip = explanation;
+
+    NSTextField *label = [NSTextField labelWithString:@"Disable AWDL while Artemis is open"];
+    label.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
+    label.toolTip = explanation;
+
+    self.awdlStatusDot = [[NSView alloc] init];
+    self.awdlStatusDot.wantsLayer = YES;
+    self.awdlStatusDot.layer.cornerRadius = 4;
+    self.awdlStatusDot.translatesAutoresizingMaskIntoConstraints = NO;
+
+    self.awdlStatusLabel = [NSTextField labelWithString:@""];
+    self.awdlStatusLabel.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
+    self.awdlStatusLabel.textColor = NSColor.secondaryLabelColor;
+    self.awdlStatusLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    [self.awdlStatusLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    NSStackView *row = [NSStackView stackViewWithViews:@[self.awdlSwitch, label, self.awdlStatusDot, self.awdlStatusLabel]];
+    row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    row.spacing = 8;
+    [row setCustomSpacing:16 afterView:label];
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+    [bar addSubview:row];
+    [self.view addSubview:bar positioned:NSWindowAbove relativeTo:nil];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [bar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [bar.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [bar.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        [bar.heightAnchor constraintEqualToConstant:34],
+        [row.leadingAnchor constraintEqualToAnchor:bar.leadingAnchor constant:14],
+        [row.trailingAnchor constraintLessThanOrEqualToAnchor:bar.trailingAnchor constant:-14],
+        [row.centerYAnchor constraintEqualToAnchor:bar.centerYAnchor],
+        [self.awdlStatusDot.widthAnchor constraintEqualToConstant:8],
+        [self.awdlStatusDot.heightAnchor constraintEqualToConstant:8],
+    ]];
+
+    __weak typeof(self) weakSelf = self;
+    [AWDLController shared].stateChangedHandler = ^{
+        [weakSelf updateAWDLBar];
+    };
+    [self updateAWDLBar];
+}
+
+- (void)updateAWDLBar {
+    AWDLController *awdl = [AWDLController shared];
+    self.awdlSwitch.state = awdl.suppressionEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    self.awdlStatusLabel.stringValue = awdl.statusText;
+
+    NSColor *color;
+    switch (awdl.state) {
+        case ArtemisAWDLStateDisabled:
+            color = NSColor.systemGreenColor;
+            break;
+        case ArtemisAWDLStateNeedsApproval:
+        case ArtemisAWDLStateUnavailable:
+            color = NSColor.systemOrangeColor;
+            break;
+        case ArtemisAWDLStateActive:
+        default:
+            color = awdl.suppressionEnabled ? NSColor.systemOrangeColor : NSColor.tertiaryLabelColor;
+            break;
+    }
+    self.awdlStatusDot.layer.backgroundColor = color.CGColor;
+}
+
+- (IBAction)awdlSwitchChanged:(NSSwitch *)sender {
+    BOOL enable = sender.state == NSControlStateValueOn;
+
+    if (enable && ![NSUserDefaults.standardUserDefaults boolForKey:kAWDLExplainedDefaultsKey]) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.alertStyle = NSAlertStyleInformational;
+        alert.messageText = @"Disable AWDL while Artemis is open?";
+        alert.informativeText = @"This removes a common cause of Wi-Fi lag spikes. While Artemis is open, AirDrop, Handoff, Universal Control, Sidecar, AirPlay to this Mac and Apple Watch unlock won't work. Everything comes back when Artemis quits.\n\n"
+                                @"Turning AWDL off needs a small helper that runs with administrator rights. The first time, macOS asks you to allow it in System Settings › General › Login Items.";
+        [alert addButtonWithTitle:@"Disable AWDL"];
+        [alert addButtonWithTitle:@"Cancel"];
+        if ([alert runModal] != NSAlertFirstButtonReturn) {
+            sender.state = NSControlStateValueOff;
+            return;
+        }
+        [NSUserDefaults.standardUserDefaults setBool:YES forKey:kAWDLExplainedDefaultsKey];
+    }
+
+    [[AWDLController shared] setSuppressionEnabled:enable];
+    [self updateAWDLBar];
 }
 
 - (void)viewWillAppear {

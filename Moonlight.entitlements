@@ -10,5 +10,9 @@
 	<true/>
 	<key>com.apple.security.network.server</key>
 	<true/>
+	<key>com.apple.security.temporary-exception.mach-lookup.global-name</key>
+	<array>
+		<string>com.sforkoak.artemis.awdl-helper</string>
+	</array>
 </dict>
 </plist>
