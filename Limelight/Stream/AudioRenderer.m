@@ -23,7 +23,7 @@
 #define TARGET_SLACK_MAX_MS 30
 #define TARGET_SLACK_GROWTH_MS 5                // per underrun
 #define TARGET_SLACK_DECAY_MS 1                 // per interval without an underrun
-#define TARGET_SLACK_DECAY_INTERVAL_MS 10000
+#define TARGET_SLACK_DECAY_INTERVAL_MS 5000
 #define TRIM_WINDOW_MS 1000
 // At most one trimmed packet per this many, so trimming is spread out
 #define TRIM_SPACING_PACKETS 8
