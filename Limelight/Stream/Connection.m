@@ -34,7 +34,7 @@
 
 static NSLock* initLock;
 static id<ConnectionCallbacks> _callbacks;
-static NSString *hostAddress;
+static NSString *hostUUID;
 static VideoDecoderRenderer* renderer;
 
 int DrDecoderSetup(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags)
@@ -85,9 +85,9 @@ void ArDecodeAndPlaySample(char* sampleData, int sampleLength)
 }
 
 - (void)updateVolume {
-    if (hostAddress != nil) {
-        NSString *uuid = [SettingsClass getHostUUIDFrom:hostAddress];
-        ArtemisAudioSetVolume([SettingsClass volumeLevelFor:uuid]);
+    // By UUID: the stream's address may be a Tailscale one, which isn't the saved local address
+    if (hostUUID != nil) {
+        ArtemisAudioSetVolume([SettingsClass volumeLevelFor:hostUUID]);
     }
 }
 
@@ -171,7 +171,7 @@ void ClSetHdrMode(bool enabled)
         initLock = [[NSLock alloc] init];
     }
     
-    hostAddress = config.host;
+    hostUUID = config.hostUUID;
     [self updateVolume];
     
     strncpy(_hostString,
