@@ -24,7 +24,7 @@ static NSString *const kHelperRequirement =
     NSXPCConnection *_connection;
     NSTimer *_pollTimer;
     BOOL _helperSuppressing;
-    // As of the last refresh
+    // As of the last query
     SMAppServiceStatus _helperStatus;
     NSString *_lastError;
 }
@@ -103,10 +103,15 @@ static NSString *const kHelperRequirement =
 
 - (void)refresh {
     BOOL wanted = self.suppressionEnabled;
-    // Ask smd once per poll, and only when it matters; each query is an XPC round trip
-    _helperStatus = wanted ? [self helperService].status : SMAppServiceStatusNotRegistered;
-    if (wanted && !_helperSuppressing && _helperStatus == SMAppServiceStatusEnabled) {
-        [self tellHelperToSuppress:YES];
+    // Each query is an XPC round trip to smd, so only ask while waiting to suppress. Once
+    // the helper is suppressing, losing it shows up as an XPC interruption instead.
+    if (!wanted) {
+        _helperStatus = SMAppServiceStatusNotRegistered;
+    } else if (!_helperSuppressing) {
+        _helperStatus = [self helperService].status;
+        if (_helperStatus == SMAppServiceStatusEnabled) {
+            [self tellHelperToSuppress:YES];
+        }
     }
     [self updateState];
 }
