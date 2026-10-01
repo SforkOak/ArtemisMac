@@ -54,6 +54,9 @@
 // Whether the next stream launched from here asks Apollo for a virtual display
 @property (nonatomic) BOOL launchInVirtualDisplay;
 
+@property (nonatomic, copy) NSString *pendingLaunchAppUUID;
+@property (nonatomic, copy) NSString *pendingLaunchAppName;
+
 @end
 
 const CGFloat scaleBase = 1.125;
@@ -329,6 +332,36 @@ const CGFloat scaleBase = 1.125;
 
 - (void)openApp:(TemporaryApp *)app {
     [self openApp:app useVirtualDisplay:[self defaultUseVirtualDisplayForApp:app]];
+}
+
+- (void)launchAppWithUUID:(NSString *)appUUID name:(NSString *)appName {
+    self.pendingLaunchAppUUID = appUUID;
+    self.pendingLaunchAppName = appName;
+    if (self.isViewLoaded) {
+        [self launchPendingAppAfterAppListLoaded:NO];
+    }
+}
+
+// App UUIDs only arrive with a fresh app list, so if the app isn't found yet, wait for one
+- (void)launchPendingAppAfterAppListLoaded:(BOOL)appListLoaded {
+    NSString *uuid = self.pendingLaunchAppUUID;
+    if (uuid == nil) {
+        return;
+    }
+
+    for (TemporaryApp *app in self.host.appList) {
+        if (app.uuid != nil && [app.uuid caseInsensitiveCompare:uuid] == NSOrderedSame) {
+            self.pendingLaunchAppUUID = nil;
+            [self openApp:app];
+            return;
+        }
+    }
+
+    if (appListLoaded) {
+        self.pendingLaunchAppUUID = nil;
+        NSString *message = [NSString stringWithFormat:@"%@ isn't in %@'s app list.", self.pendingLaunchAppName ?: @"That app", self.host.name];
+        [AlertPresenter displayAlert:NSAlertStyleWarning title:@"Couldn't Open Link" message:message window:self.view.window completionHandler:nil];
+    }
 }
 
 - (BOOL)defaultUseVirtualDisplayForApp:(TemporaryApp *)app {
@@ -814,6 +847,7 @@ static const CGFloat runningAnimationDuration = 1.0;
             dispatch_async(dispatch_get_main_queue(), ^{
                 NSArray<TemporaryApp *> *newItems = [self fetchApps];
                 [self updateCollectionViewDataWithOld:oldItems new:newItems];
+                [self launchPendingAppAfterAppListLoaded:YES];
             });
         }
     });

@@ -26,6 +26,7 @@
 #import "DataManager.h"
 #import "PairManager.h"
 #import "AWDLController.h"
+#import "DeepLinkRouter.h"
 #import "WakeOnLanManager.h"
 
 @interface HostsViewController () <NSCollectionViewDataSource, NSCollectionViewDelegate, NSSearchFieldDelegate, NSControlTextEditingDelegate, HostsViewControllerDelegate, DiscoveryCallback, PairCallback, NSMenuItemValidation>
@@ -41,6 +42,7 @@
 @property (nonatomic, strong) NSOperationQueue *opQueue;
 @property (nonatomic, strong) DiscoveryManager *discMan;
 
+@property (nonatomic, strong) id deepLinkObserver;
 @property (nonatomic, strong) NSSwitch *awdlSwitch;
 @property (nonatomic, strong) NSView *awdlStatusDot;
 @property (nonatomic, strong) NSTextField *awdlStatusLabel;
@@ -62,6 +64,122 @@
     
     [self prepareDiscovery];
     [self installAWDLBar];
+
+    __weak typeof(self) weakSelf = self;
+    self.deepLinkObserver = [[NSNotificationCenter defaultCenter] addObserverForName:ArtemisDeepLinkNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
+        [weakSelf handlePendingDeepLink];
+    }];
+    // A link that launched Artemis arrived before this view existed
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [weakSelf handlePendingDeepLink];
+    });
+}
+
+
+#pragma mark - art:// links
+
+- (void)handlePendingDeepLink {
+    NSURL *url = [[DeepLinkRouter shared] takePendingURL];
+    if (url == nil) {
+        return;
+    }
+
+    NSURLComponents *components = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+    NSMutableDictionary<NSString *, NSString *> *query = [NSMutableDictionary dictionary];
+    for (NSURLQueryItem *item in components.queryItems) {
+        if (item.value != nil) {
+            query[item.name] = item.value;
+        }
+    }
+
+    if ([components.host.lowercaseString isEqualToString:@"launch"]) {
+        [self handleLaunchLink:query];
+    } else {
+        [self handlePairLinkToAddress:components.host port:components.port query:query];
+    }
+}
+
+- (void)showDeepLinkError:(NSString *)message {
+    [AlertPresenter displayAlert:NSAlertStyleWarning title:@"Couldn't Open Link" message:message window:self.view.window completionHandler:nil];
+}
+
+// art://HOST:PORT?pin=1234&passphrase=...&name=... from Apollo's OTP pairing page
+- (void)handlePairLinkToAddress:(NSString *)address port:(NSNumber *)port query:(NSDictionary<NSString *, NSString *> *)query {
+    NSString *pin = query[@"pin"];
+    NSString *passphrase = query[@"passphrase"];
+    NSCharacterSet *nonDigits = [[NSCharacterSet decimalDigitCharacterSet] invertedSet];
+    if (address.length == 0 || pin.length != 4 || [pin rangeOfCharacterFromSet:nonDigits].location != NSNotFound || passphrase.length == 0) {
+        [self showDeepLinkError:@"This pairing link is incomplete. Generate a new one on Apollo's PIN pairing page."];
+        return;
+    }
+    if (port != nil && port.integerValue != 47989) {
+        [self showDeepLinkError:[NSString stringWithFormat:@"Artemis only supports hosts on the default port (47989), but this link uses %@.", port]];
+        return;
+    }
+
+    void (^pair)(TemporaryHost *) = ^(TemporaryHost *host) {
+        if (host.pairState == PairStatePaired) {
+            [AlertPresenter displayAlert:NSAlertStyleInformational title:[NSString stringWithFormat:@"Already paired with %@", host.name] message:nil window:self.view.window completionHandler:nil];
+            return;
+        }
+        self.selectedHost = host;
+        [self setupPairing:host otpPin:pin passphrase:passphrase];
+    };
+
+    TemporaryHost *existing = [self hostWithAddress:address];
+    if (existing != nil) {
+        pair(existing);
+    } else {
+        [self addHostWithAddress:address completion:pair];
+    }
+}
+
+// art://launch?host_uuid=...&app_uuid=...&app_name=... from Apollo's app list
+- (void)handleLaunchLink:(NSDictionary<NSString *, NSString *> *)query {
+    NSString *hostUUID = query[@"host_uuid"];
+    NSString *appUUID = query[@"app_uuid"];
+    NSString *hostName = query[@"host_name"] ?: @"this host";
+    if (hostUUID.length == 0 || appUUID.length == 0) {
+        [self showDeepLinkError:@"This launch link is incomplete."];
+        return;
+    }
+
+    TemporaryHost *host = nil;
+    for (TemporaryHost *candidate in self.hostList ?: self.hosts) {
+        if ([candidate.uuid caseInsensitiveCompare:hostUUID] == NSOrderedSame) {
+            host = candidate;
+            break;
+        }
+    }
+    if (host == nil || host.pairState != PairStatePaired) {
+        [self showDeepLinkError:[NSString stringWithFormat:@"Pair with %@ first, then try the link again.", hostName]];
+        return;
+    }
+
+    for (NSViewController *child in self.parentViewController.childViewControllers) {
+        if ([child isKindOfClass:[AppsViewController class]] && child.view.superview != nil) {
+            AppsViewController *appsVC = (AppsViewController *)child;
+            if (appsVC.host == host) {
+                [appsVC launchAppWithUUID:appUUID name:query[@"app_name"]];
+            } else {
+                [self showDeepLinkError:[NSString stringWithFormat:@"Go back to the host list, then try the link for %@ again.", hostName]];
+            }
+            return;
+        }
+    }
+
+    [self transitionToAppsVCWithHost:host launchingAppUUID:appUUID name:query[@"app_name"]];
+}
+
+- (TemporaryHost *)hostWithAddress:(NSString *)address {
+    for (TemporaryHost *host in self.hostList ?: self.hosts) {
+        for (NSString *candidate in @[host.activeAddress ?: @"", host.address ?: @"", host.localAddress ?: @"", host.externalAddress ?: @"", host.ipv6Address ?: @""]) {
+            if ([candidate caseInsensitiveCompare:address] == NSOrderedSame) {
+                return host;
+            }
+        }
+    }
+    return nil;
 }
 
 
@@ -206,9 +324,16 @@ static NSString *const kAWDLExplainedDefaultsKey = @"awdlTradeoffExplained";
 }
 
 - (void)transitionToAppsVCWithHost:(TemporaryHost *)host {
+    [self transitionToAppsVCWithHost:host launchingAppUUID:nil name:nil];
+}
+
+- (void)transitionToAppsVCWithHost:(TemporaryHost *)host launchingAppUUID:(NSString *)appUUID name:(NSString *)appName {
     AppsViewController *appsVC = [self.storyboard instantiateControllerWithIdentifier:@"appsVC"];
     appsVC.host = host;
     appsVC.hostsVC = self;
+    if (appUUID != nil) {
+        [appsVC launchAppWithUUID:appUUID name:appName];
+    }
     
     [self.parentViewController addChildViewController:appsVC];
     [self.parentViewController.view addSubview:appsVC.view];
@@ -313,7 +438,11 @@ static NSString *const kAWDLExplainedDefaultsKey = @"awdlTradeoffExplained";
 }
 
 - (void)addHostManuallyHandlerWithInputValue:(NSString *)inputValue {
-    NSString* hostAddress = inputValue;
+    [self addHostWithAddress:inputValue completion:nil];
+}
+
+// Adds a host by address. The completion runs on the main queue with the new host.
+- (void)addHostWithAddress:(NSString *)hostAddress completion:(void (^)(TemporaryHost *host))completion {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
         [self.discMan discoverHost:hostAddress withCallback:^(TemporaryHost* host, NSString* error){
             if (host != nil) {
@@ -322,6 +451,9 @@ static NSString *const kAWDLExplainedDefaultsKey = @"awdlTradeoffExplained";
                     [dataMan updateHost:host];
                     self.hosts = [self.hosts arrayByAddingObject:host];
                     [self updateHosts];
+                    if (completion != nil) {
+                        completion(host);
+                    }
                 });
             } else {
                 dispatch_async(dispatch_get_main_queue(), ^{

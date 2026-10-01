@@ -19,6 +19,9 @@
 @property (nonatomic, strong) HostsViewController *hostsVC;
 @property (weak) IBOutlet CollectionView *collectionView;
 
+// Launches the app with this Apollo UUID as soon as it's in the app list (art:// launch links)
+- (void)launchAppWithUUID:(NSString *)appUUID name:(NSString *)appName;
+
 @end
 
 extern BOOL usesNewAppCoverArtAspectRatio(void);

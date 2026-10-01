@@ -97,6 +97,7 @@
 				"macOS/Helpers/NSCollectionView+Moonlight.m",
 				"macOS/Helpers/NSResponder+Moonlight.m",
 				"macOS/Helpers/NSView+Moonlight.m",
+				macOS/Helpers/DeepLinkRouter.m,
 				"macOS/Helpers/NSWindow+Moonlight.m",
 				macOS/Helpers/NumberOnlyFormatter.swift,
 				macOS/Helpers/ViewExtensions.swift,

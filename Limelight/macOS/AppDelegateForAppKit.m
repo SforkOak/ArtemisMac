@@ -18,6 +18,7 @@
 
 #import "Moonlight-Swift.h"
 #import "AWDLController.h"
+#import "DeepLinkRouter.h"
 
 typedef enum : NSUInteger {
     SystemTheme,
@@ -41,6 +42,12 @@ typedef enum : NSUInteger {
 
     // Re-applies "Disable AWDL while Artemis is open" if it was left on
     [[AWDLController shared] start];
+}
+
+- (void)application:(NSApplication *)application openURLs:(NSArray<NSURL *> *)urls {
+    for (NSURL *url in urls) {
+        [[DeepLinkRouter shared] handleURL:url];
+    }
 }
 
 - (void)applicationWillFinishLaunching:(NSNotification *)notification {
