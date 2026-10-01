@@ -224,11 +224,14 @@ struct StreamView: View {
         ScrollView {
             VStack {
                 FormSection(title: "Resolution and FPS") {
-                    FormCell(title: "Resolution", contentWidth: 100, content: {
+                    FormCell(title: "Resolution", contentWidth: 220, content: {
                         Picker("", selection: $settingsModel.selectedResolution) {
                             ForEach(SettingsModel.resolutions, id: \.self) { resolution in
                                 if resolution == .zero {
                                     Text("Custom")
+                                } else if resolution == SettingsModel.matchDisplayResolution {
+                                    let size = SettingsModel.matchDisplayPixelSize()
+                                    Text(verbatim: "Match Display (\(Int(size.width))×\(Int(size.height)))")
                                 } else {
                                     Text(verbatim: resolution.height == 2160 ? "4K" : "\(Int(resolution.height))p")
                                 }

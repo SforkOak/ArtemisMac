@@ -94,8 +94,16 @@ class SettingsClass: NSObject {
         if let settings = Settings.getSettings(for: key) {
             let dataMan = DataManager()
             
-            let dataResolutionWidth = settings.resolution == .zero ? settings.customResolution!.width : settings.resolution.width
-            let dataResolutionHeight = settings.resolution == .zero ? settings.customResolution!.height : settings.resolution.height
+            let resolution: CGSize
+            if settings.resolution == SettingsModel.matchDisplayResolution {
+                resolution = SettingsModel.matchDisplayPixelSize()
+            } else if settings.resolution == .zero {
+                resolution = settings.customResolution ?? SettingsModel.defaultResolution
+            } else {
+                resolution = settings.resolution
+            }
+            let dataResolutionWidth = resolution.width
+            let dataResolutionHeight = resolution.height
             let dataFps = settings.fps == .zero ? Int(settings.customFps!) : settings.fps
             let dataBitrate = settings.bitrate
             let dataCodec = settings.codec != SettingsModel.getInt(from: "H.264", in: SettingsModel.videoCodecs)

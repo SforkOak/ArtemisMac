@@ -182,7 +182,34 @@ class SettingsModel: ObservableObject {
         }
     }
 
-    static var resolutions: [CGSize] = [CGSizeMake(1280, 720), CGSizeMake(1920, 1080), CGSizeMake(2560, 1440), CGSizeMake(3840, 2160), .zero]
+    // Stored in place of a real size; resolved to the display's size when streaming starts
+    static let matchDisplayResolution = CGSizeMake(1, 1)
+    static var resolutions: [CGSize] = [CGSizeMake(1280, 720), CGSizeMake(1920, 1080), CGSizeMake(2560, 1440), CGSizeMake(3840, 2160), matchDisplayResolution, .zero]
+
+    // The fullscreen area of the main display (below the notch), in physical panel pixels.
+    // In scaled display modes macOS resamples its backing store to the panel, so this uses
+    // the panel's native pixel width rather than the backing scale factor.
+    static func matchDisplayPixelSize() -> CGSize {
+        guard let screen = NSScreen.main else {
+            return defaultResolution
+        }
+
+        var pixelsPerPoint = screen.backingScaleFactor
+        if let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+           let modes = CGDisplayCopyAllDisplayModes(displayID, [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary) as? [CGDisplayMode] {
+            let nativeModeFlag: UInt32 = 0x0200_0000 // kDisplayModeNativeFlag
+            let nativeWidth = modes.filter { $0.ioFlags & nativeModeFlag != 0 }.map { $0.pixelWidth }.max()
+                ?? modes.map { $0.pixelWidth }.max()
+            if let nativeWidth, screen.frame.width > 0 {
+                pixelsPerPoint = CGFloat(nativeWidth) / screen.frame.width
+            }
+        }
+
+        // Encoders want even dimensions
+        func even(_ value: CGFloat) -> CGFloat { CGFloat(Int(value) & ~1) }
+        let usableHeight = screen.frame.height - screen.safeAreaInsets.top
+        return CGSizeMake(even(screen.frame.width * pixelsPerPoint), even(usableHeight * pixelsPerPoint))
+    }
     static var fpss: [Int] = [30, 60, 90, 120, 144, .zero]
     static var bitrateSteps: [Float] = [
         0.5,
