@@ -658,6 +658,7 @@ static NSString *const kShowStatsDefaultsKey = @"showStreamStats";
     streamConfig.height = [self.class getResolution].height;
 
     streamConfig.frameRate = [streamSettings.framerate intValue];
+    streamConfig.frameRateMultiplier = (int)[SettingsClass frameRateMultiplierFor:self.app.host.uuid];
     streamConfig.bitRate = [streamSettings.bitrate intValue];
     streamConfig.optimizeGameSettings = streamSettings.optimizeGames;
     streamConfig.playAudioOnPC = streamSettings.playAudioOnPC;

@@ -382,7 +382,7 @@ void ClSetHdrMode(bool enabled)
     LiInitializeStreamConfiguration(&_streamConfig);
     _streamConfig.width = config.width;
     _streamConfig.height = config.height;
-    _streamConfig.fps = config.frameRate;
+    _streamConfig.fps = config.frameRate * MAX(1, config.frameRateMultiplier);
     _streamConfig.bitrate = config.bitRate;
     _streamConfig.supportedVideoFormats = config.supportedVideoFormats;
     _streamConfig.audioConfiguration = config.audioConfiguration;

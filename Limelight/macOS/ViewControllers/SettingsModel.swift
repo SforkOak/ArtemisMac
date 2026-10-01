@@ -176,6 +176,11 @@ class SettingsModel: ObservableObject {
             saveSettings()
         }
     }
+    @Published var frameRateMultiplier: Int {
+        didSet {
+            saveSettings()
+        }
+    }
 
     static var resolutions: [CGSize] = [CGSizeMake(1280, 720), CGSizeMake(1920, 1080), CGSizeMake(2560, 1440), CGSizeMake(3840, 2160), .zero]
     static var fpss: [Int] = [30, 60, 90, 120, 144, .zero]
@@ -254,6 +259,8 @@ class SettingsModel: ObservableObject {
     static let resolutionScaleRange = 20...200
     static let defaultWifiKeepalive = true
     static let defaultClipboardSync = true
+    static let frameRateMultipliers = [1, 2, 4]
+    static let defaultFrameRateMultiplier = 1
 
     init() {
         if let hosts = Self.hosts {
@@ -306,6 +313,7 @@ class SettingsModel: ObservableObject {
         resolutionScale = Self.defaultResolutionScale
         wifiKeepalive = Self.defaultWifiKeepalive
         clipboardSync = Self.defaultClipboardSync
+        frameRateMultiplier = Self.defaultFrameRateMultiplier
     }
 
     func loadDefaultSettings() {
@@ -343,6 +351,7 @@ class SettingsModel: ObservableObject {
         resolutionScale = Self.defaultResolutionScale
         wifiKeepalive = Self.defaultWifiKeepalive
         clipboardSync = Self.defaultClipboardSync
+        frameRateMultiplier = Self.defaultFrameRateMultiplier
     }
 
     func loadAndSaveDefaultSettings() {
@@ -410,6 +419,7 @@ class SettingsModel: ObservableObject {
                 resolutionScale = settings.resolutionScale ?? Self.defaultResolutionScale
                 wifiKeepalive = settings.wifiKeepalive ?? Self.defaultWifiKeepalive
                 clipboardSync = settings.clipboardSync ?? Self.defaultClipboardSync
+                frameRateMultiplier = settings.frameRateMultiplier ?? Self.defaultFrameRateMultiplier
 
                 func loadNillableDimensionSetting(inputDimensions: CGSize?) -> CGSize? {
                     let finalSize: CGSize?
@@ -493,7 +503,8 @@ class SettingsModel: ObservableObject {
             useVirtualDisplay: useVirtualDisplay,
             resolutionScale: min(max(resolutionScale, Self.resolutionScaleRange.lowerBound), Self.resolutionScaleRange.upperBound),
             wifiKeepalive: wifiKeepalive,
-            clipboardSync: clipboardSync
+            clipboardSync: clipboardSync,
+            frameRateMultiplier: Self.frameRateMultipliers.contains(frameRateMultiplier) ? frameRateMultiplier : Self.defaultFrameRateMultiplier
         )
         
         if let data = try? PropertyListEncoder().encode(settings) {

@@ -23,6 +23,10 @@
 @property int width;
 @property int height;
 @property int frameRate;
+// Artemis "warp": the host encodes at frameRate x this (1, 2 or 4) while the launch
+// request (and so the host's virtual display) keeps frameRate. Frames reach the
+// client sooner after the host renders them, which smooths out stutter.
+@property int frameRateMultiplier;
 @property int bitRate;
 @property int riKeyId;
 @property BOOL streamingRemotely;

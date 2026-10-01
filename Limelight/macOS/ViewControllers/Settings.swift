@@ -37,6 +37,7 @@ struct Settings: Encodable, Decodable {
     let resolutionScale: Int?
     let wifiKeepalive: Bool?
     let clipboardSync: Bool?
+    let frameRateMultiplier: Int?
 
     static func getSettings(for key: String) -> Self? {
         if let data = UserDefaults.standard.data(forKey: SettingsClass.profileKey(for: key) ) {
@@ -207,6 +208,10 @@ class SettingsClass: NSObject {
         let framePacing = Settings.getSettings(for: key)?.framePacing
             ?? SettingsModel.getInt(from: SettingsModel.defaultPacingOptions, in: SettingsModel.pacingOptions)
         return SettingsModel.pacingOptions[safe: framePacing] == "Smoothest Video"
+    }
+
+    @objc static func frameRateMultiplier(for key: String) -> Int {
+        Settings.getSettings(for: key)?.frameRateMultiplier ?? SettingsModel.defaultFrameRateMultiplier
     }
 
     @objc static func useVirtualDisplay(for key: String) -> Bool {

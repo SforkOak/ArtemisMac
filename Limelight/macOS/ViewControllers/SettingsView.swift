@@ -268,6 +268,20 @@ struct StreamView: View {
                                 .fixedSize()
                         })
                     }
+
+                    Divider()
+
+                    FormCell(title: "Frame Rate Multiplier", contentWidth: 100, content: {
+                        Picker("", selection: $settingsModel.frameRateMultiplier) {
+                            ForEach(SettingsModel.frameRateMultipliers, id: \.self) { multiplier in
+                                Text("\(multiplier)×")
+                            }
+                        }
+                    })
+                    Text("Streams at a multiple of the FPS above while the host display keeps that FPS. Frames arrive sooner, which smooths out stutter.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 
                 Spacer()
