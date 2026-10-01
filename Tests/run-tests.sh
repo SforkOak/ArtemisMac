@@ -8,3 +8,7 @@ xcrun clang -std=c11 -Wall -Wextra -Werror -arch arm64 -I"$ROOT/Limelight/Stream
     "$ROOT/Tests/VideoTests.c" "$ROOT/Limelight/Stream/VideoBitstream.c" "$ROOT/Limelight/Stream/ColorConversion.c" \
     -o "$OUT/VideoTests"
 "$OUT/VideoTests"
+xcrun clang -std=c11 -Wall -Wextra -Werror -arch arm64 -I"$ROOT/Limelight/Network" \
+    "$ROOT/Tests/NetworkPolicyTests.c" "$ROOT/Limelight/Network/NetworkPolicy.c" \
+    -o "$OUT/NetworkPolicyTests"
+"$OUT/NetworkPolicyTests"
