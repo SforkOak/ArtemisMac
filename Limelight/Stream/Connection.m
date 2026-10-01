@@ -60,7 +60,7 @@ static VideoDecoderRenderer* renderer;
 
 int DrDecoderSetup(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags)
 {
-    [renderer setupWithVideoFormat:videoFormat frameRate:redrawRate];
+    [renderer setupWithVideoFormat:videoFormat width:width height:height frameRate:redrawRate];
     return 0;
 }
 
@@ -71,51 +71,23 @@ void DrStart(void)
 
 void DrStop(void)
 {
+    // With direct submit, frames can still arrive until moonlight-common-c joins its
+    // receive thread, so the renderer itself is released in DrCleanup()
     [renderer stop];
 
     _callbacks = nil;
+}
+
+void DrCleanup(void)
+{
+    [renderer cleanup];
     renderer = nil;
 }
 
+// Called on moonlight-common-c's receive thread the moment a frame is reassembled
 int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit)
 {
-    int offset = 0;
-    int ret;
-    unsigned int ptsMs = (unsigned int)(decodeUnit->presentationTimeUs / 1000);
-    unsigned char* data = (unsigned char*) malloc(decodeUnit->fullLength);
-    if (data == NULL) {
-        // A frame was lost due to OOM condition
-        return DR_NEED_IDR;
-    }
-
-    PLENTRY entry = decodeUnit->bufferList;
-    while (entry != NULL) {
-        // Submit parameter set NALUs directly since no copy is required by the decoder
-        if (entry->bufferType != BUFFER_TYPE_PICDATA) {
-            ret = [renderer submitDecodeBuffer:(unsigned char*)entry->data
-                                        length:entry->length
-                                    bufferType:entry->bufferType
-                                     frameType:decodeUnit->frameType
-                                           pts:ptsMs];
-            if (ret != DR_OK) {
-                free(data);
-                return ret;
-            }
-        }
-        else {
-            memcpy(&data[offset], entry->data, entry->length);
-            offset += entry->length;
-        }
-
-        entry = entry->next;
-    }
-
-    // This function will take our picture data buffer
-    return [renderer submitDecodeBuffer:data
-                                 length:offset
-                             bufferType:BUFFER_TYPE_PICDATA
-                              frameType:decodeUnit->frameType
-                                    pts:ptsMs];
+    return [renderer submitDecodeUnit:decodeUnit];
 }
 
 int ArInit(int audioConfiguration, POPUS_MULTISTREAM_CONFIGURATION originalOpusConfig, void* context, int flags)
@@ -320,10 +292,12 @@ void ClConnectionTerminated(int errorCode)
 
 void ClLogMessage(const char* format, ...)
 {
+    // Route moonlight-common-c's messages (codec negotiation, RFI, packet loss) into the unified log
     va_list va;
     va_start(va, format);
-    vfprintf(stderr, format, va);
+    NSString* message = [[NSString alloc] initWithFormat:[NSString stringWithUTF8String:format] arguments:va];
     va_end(va);
+    LogTag(LOG_I, @"common-c", @"%@", [message stringByTrimmingCharactersInSet:NSCharacterSet.newlineCharacterSet]);
 }
 
 void ClRumble(unsigned short controllerNumber, unsigned short lowFreqMotor, unsigned short highFreqMotor)
@@ -334,6 +308,11 @@ void ClRumble(unsigned short controllerNumber, unsigned short lowFreqMotor, unsi
 void ClConnectionStatusUpdate(int status)
 {
     [_callbacks connectionStatusUpdate:status];
+}
+
+void ClSetHdrMode(bool enabled)
+{
+    [renderer setHdrMode:enabled];
 }
 
 -(void) terminate
@@ -407,6 +386,8 @@ void ClConnectionStatusUpdate(int status)
     _streamConfig.bitrate = config.bitRate;
     _streamConfig.supportedVideoFormats = config.supportedVideoFormats;
     _streamConfig.audioConfiguration = config.audioConfiguration;
+    _streamConfig.colorSpace = COLORSPACE_REC_709;
+    _streamConfig.colorRange = COLOR_RANGE_LIMITED;
 
     // Every Apple Silicon Mac has ARMv8 crypto instructions, so encrypting
     // the video and audio streams costs next to nothing.
@@ -432,12 +413,15 @@ void ClConnectionStatusUpdate(int status)
     _drCallbacks.setup = DrDecoderSetup;
     _drCallbacks.start = DrStart;
     _drCallbacks.stop = DrStop;
+    _drCallbacks.cleanup = DrCleanup;
+    _drCallbacks.submitDecodeUnit = DrSubmitDecodeUnit;
 
-//#if TARGET_OS_IPHONE
-    // RFI doesn't work properly with HEVC on iOS 11 with an iPhone SE (at least)
-    // It doesnt work on macOS either, tested with Network Link Conditioner.
-    _drCallbacks.capabilities = CAPABILITY_PULL_RENDERER;
-//#endif
+    // Lowest latency: frames go straight from the network thread to VideoToolbox's async
+    // decoder, with no queue in between. Reference frame invalidation lets the host
+    // repair packet loss (common on Wi-Fi) without a full keyframe for HEVC and AV1.
+    _drCallbacks.capabilities = CAPABILITY_DIRECT_SUBMIT |
+                                CAPABILITY_REFERENCE_FRAME_INVALIDATION_HEVC |
+                                CAPABILITY_REFERENCE_FRAME_INVALIDATION_AV1;
 
     LiInitializeAudioCallbacks(&_arCallbacks);
     _arCallbacks.init = ArInit;
@@ -455,6 +439,7 @@ void ClConnectionStatusUpdate(int status)
     _clCallbacks.logMessage = ClLogMessage;
     _clCallbacks.rumble = ClRumble;
     _clCallbacks.connectionStatusUpdate = ClConnectionStatusUpdate;
+    _clCallbacks.setHdrMode = ClSetHdrMode;
 
     return self;
 }

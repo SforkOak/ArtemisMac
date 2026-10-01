@@ -97,7 +97,7 @@ class SettingsClass: NSObject {
             let dataResolutionHeight = settings.resolution == .zero ? settings.customResolution!.height : settings.resolution.height
             let dataFps = settings.fps == .zero ? Int(settings.customFps!) : settings.fps
             let dataBitrate = settings.bitrate
-            let dataCodec = SettingsModel.getBool(from: settings.codec, in: SettingsModel.videoCodecs)
+            let dataCodec = settings.codec != SettingsModel.getInt(from: "H.264", in: SettingsModel.videoCodecs)
             
             // TODO: Add this back when VideoDecoderRenderer gets merged, with frame pacing setting check
 //            let dataFramePacing = SettingsModel.getBool(from: settings.framePacing, in: SettingsModel.pacingOptions)
@@ -193,6 +193,22 @@ class SettingsClass: NSObject {
         return SettingsModel.defaultVolumeLevel
     }
 
+    // Index into SettingsModel.videoCodecs
+    @objc static func videoCodec(for key: String) -> Int {
+        if let settings = Settings.getSettings(for: key) {
+            return settings.codec
+        }
+
+        return SettingsModel.getInt(from: SettingsModel.defaultVideoCodec, in: SettingsModel.videoCodecs)
+    }
+
+    // YES for "Smoothest Video" (v-sync), NO for "Lowest Latency"
+    @objc static func vsync(for key: String) -> Bool {
+        let framePacing = Settings.getSettings(for: key)?.framePacing
+            ?? SettingsModel.getInt(from: SettingsModel.defaultPacingOptions, in: SettingsModel.pacingOptions)
+        return SettingsModel.pacingOptions[safe: framePacing] == "Smoothest Video"
+    }
+
     @objc static func useVirtualDisplay(for key: String) -> Bool {
         Settings.getSettings(for: key)?.useVirtualDisplay ?? SettingsModel.defaultUseVirtualDisplay
     }
@@ -207,5 +223,11 @@ class SettingsClass: NSObject {
 
     @objc static func clipboardSync(for key: String) -> Bool {
         Settings.getSettings(for: key)?.clipboardSync ?? SettingsModel.defaultClipboardSync
+    }
+}
+
+extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }

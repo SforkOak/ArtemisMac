@@ -38,6 +38,9 @@
 @property (nonatomic, strong) StreamManager *streamMan;
 @property (nonatomic, strong) ApolloSession *apolloSession;
 @property (nonatomic, strong) NSMenuItem *apolloMenuItem;
+@property (nonatomic, strong) NSTextField *statsOverlay;
+@property (nonatomic, strong) NSTimer *statsTimer;
+@property (nonatomic) NSUInteger statsTicks;
 @property (nonatomic, readonly) StreamViewMac *streamView;
 @property (nonatomic, strong) id windowDidExitFullScreenNotification;
 @property (nonatomic, strong) id windowDidEnterFullScreenNotification;
@@ -115,8 +118,9 @@
     
     self.windowWillCloseNotification = [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowWillCloseNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
         if ([weakSelf isOurWindowTheWindowInNotiifcation:note]) {
-            // Stop the keepalive before the connection is torn down
+            // Stop the keepalive and stats before the connection is torn down
             [weakSelf.apolloSession streamWillStop];
+            [weakSelf stopStatsTimer];
             [weakSelf removeApolloMenu];
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 if (weakSelf.useSystemControllerDriver) {
@@ -153,6 +157,7 @@
     [[NSNotificationCenter defaultCenter] removeObserver:self.windowWillCloseNotification];
 
     [self removeApolloMenu];
+    [self stopStatsTimer];
     [self.hidSupport tearDownHidManager];
     self.hidSupport = nil;
 }
@@ -269,6 +274,14 @@
         }
     }
     
+    // Ctrl-Opt-Cmd-S: performance stats overlay
+    if (event.keyCode == kVK_ANSI_S
+        && eventModifierFlags == (NSEventModifierFlagControl | NSEventModifierFlagOption | NSEventModifierFlagCommand)) {
+        [self.hidSupport releaseAllModifierKeys];
+        [self toggleStatsOverlay:nil];
+        return YES;
+    }
+
     // Apollo menu shortcuts: Send Clipboard / Get Clipboard
     if (self.apolloMenuItem != nil
         && (event.keyCode == kVK_ANSI_V || event.keyCode == kVK_ANSI_C)
@@ -422,6 +435,86 @@
 }
 
 
+#pragma mark - Performance stats
+
+static NSString *const kShowStatsDefaultsKey = @"showStreamStats";
+
+- (void)startStatsTimer {
+    if (self.statsTimer != nil) {
+        return;
+    }
+    self.statsTicks = 0;
+    [self setStatsOverlayVisible:[NSUserDefaults.standardUserDefaults boolForKey:kShowStatsDefaultsKey]];
+
+    __weak typeof(self) weakSelf = self;
+    self.statsTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *timer) {
+        [weakSelf updateStats];
+    }];
+}
+
+- (void)stopStatsTimer {
+    [self.statsTimer invalidate];
+    self.statsTimer = nil;
+}
+
+- (IBAction)toggleStatsOverlay:(id)sender {
+    BOOL visible = !(self.statsOverlay != nil && !self.statsOverlay.hidden);
+    [NSUserDefaults.standardUserDefaults setBool:visible forKey:kShowStatsDefaultsKey];
+    [self setStatsOverlayVisible:visible];
+    [self updateStats];
+}
+
+- (void)setStatsOverlayVisible:(BOOL)visible {
+    if (visible && self.statsOverlay == nil) {
+        NSTextField *overlay = [NSTextField wrappingLabelWithString:@""];
+        overlay.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightMedium];
+        overlay.textColor = NSColor.whiteColor;
+        overlay.drawsBackground = YES;
+        overlay.backgroundColor = [NSColor colorWithWhite:0 alpha:0.6];
+        overlay.translatesAutoresizingMaskIntoConstraints = NO;
+        [self.view addSubview:overlay positioned:NSWindowAbove relativeTo:nil];
+        [NSLayoutConstraint activateConstraints:@[
+            [overlay.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:8],
+            [overlay.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:8],
+        ]];
+        self.statsOverlay = overlay;
+    }
+    self.statsOverlay.hidden = !visible;
+}
+
+- (void)updateStats {
+    ArtemisVideoStatsSnapshot s;
+    VideoStats *videoStats = self.streamMan.videoStats;
+    if (videoStats == nil || ![videoStats lastWindow:&s]) {
+        return;
+    }
+
+    NSString *text = [NSString stringWithFormat:
+        @"%@\n"
+        @"RTT          %u ± %u ms\n"
+        @"Host encode  %5.1f ms\n"
+        @"Receive      %5.1f ms\n"
+        @"Decode       %5.1f ms\n"
+        @"Present      %5.1f ms\n"
+        @"Client total %5.1f ms (max %.1f)\n"
+        @"Frames %u in, %u shown, %u lost, %u dropped, %u skipped",
+        videoStats.streamDescription ?: @"",
+        s.rttMs, s.rttVarianceMs,
+        s.hostLatencyMs, s.networkReceiveMs + s.queueDelayMs, s.decodeMs, s.renderMs,
+        s.clientTotalMs, s.maxClientTotalMs,
+        s.framesReceived, s.framesPresented, s.framesLostInNetwork, s.framesDroppedByDecoder, s.framesSuperseded];
+
+    if (self.statsOverlay != nil && !self.statsOverlay.hidden) {
+        self.statsOverlay.stringValue = text;
+    }
+
+    // Also log every few seconds, so latency can be checked with `log stream`
+    if (self.statsTicks++ % 5 == 0) {
+        Log(LOG_I, @"Stats: %@", [text stringByReplacingOccurrencesOfString:@"\n" withString:@" | "]);
+    }
+}
+
+
 #pragma mark - Helpers
 
 - (void)enableMenuItems:(BOOL)enable {
@@ -526,6 +619,7 @@
 
     dispatch_async(dispatch_get_main_queue(), ^{
         [self.apolloSession streamWillStop];
+        [self stopStatsTimer];
         [self uncaptureMouse];
 
         [self.delegate appDidQuit:self.app];
@@ -567,13 +661,9 @@
     streamConfig.bitRate = [streamSettings.bitrate intValue];
     streamConfig.optimizeGameSettings = streamSettings.optimizeGames;
     streamConfig.playAudioOnPC = streamSettings.playAudioOnPC;
-    streamConfig.supportedVideoFormats = VIDEO_FORMAT_H264;
-    if (streamSettings.useHevc && VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC)) {
-        streamConfig.supportedVideoFormats |= VIDEO_FORMAT_H265;
-        if (streamSettings.enableHdr) {
-            streamConfig.supportedVideoFormats |= VIDEO_FORMAT_H265_MAIN10;
-        }
-    }
+    streamConfig.supportedVideoFormats = [self.class supportedVideoFormatsForCodec:[SettingsClass videoCodecFor:self.app.host.uuid]
+                                                                              hdr:streamSettings.enableHdr];
+    streamConfig.vsync = [SettingsClass vsyncFor:self.app.host.uuid];
 
     streamConfig.multiController = streamSettings.multiController;
     streamConfig.gamepadMask = self.useSystemControllerDriver ? [ControllerSupport getConnectedGamepadMask:streamConfig] : 1;
@@ -591,6 +681,32 @@
     self.streamMan =[[StreamManager alloc] initWithConfig:streamConfig renderView:self.view connectionCallbacks:self];
     NSOperationQueue* opQueue = [[NSOperationQueue alloc] init];
     [opQueue addOperation:self.streamMan];
+}
+
+
+#pragma mark - Codecs
+
+// codec is an index into SettingsModel.videoCodecs: H.264, H.265, AV1, Automatic.
+// H.264 is always offered as a fallback. When several codecs are offered,
+// moonlight-common-c picks AV1 over HEVC over H.264 if the host supports them.
++ (int)supportedVideoFormatsForCodec:(NSInteger)codec hdr:(BOOL)hdr {
+    BOOL automatic = codec == 3;
+    int formats = VIDEO_FORMAT_H264;
+
+    if ((codec == 1 || automatic) && VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC)) {
+        formats |= VIDEO_FORMAT_H265;
+        if (hdr) {
+            formats |= VIDEO_FORMAT_H265_MAIN10;
+        }
+    }
+    // Apple Silicon decodes AV1 in hardware from M3 onwards
+    if ((codec == 2 || automatic) && VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1)) {
+        formats |= VIDEO_FORMAT_AV1_MAIN8;
+        if (hdr) {
+            formats |= VIDEO_FORMAT_AV1_MAIN10;
+        }
+    }
+    return formats;
 }
 
 
@@ -628,6 +744,7 @@
 
         [self.apolloSession streamStarted];
         [self installApolloMenu];
+        [self startStatsTimer];
 
         if ([SettingsClass autoFullscreenFor:self.app.host.uuid]) {
             if (!(self.view.window.styleMask & NSWindowStyleMaskFullScreen)) {

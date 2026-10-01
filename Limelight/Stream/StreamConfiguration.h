@@ -33,6 +33,9 @@
 @property int audioConfiguration;
 @property int supportedVideoFormats;
 @property BOOL multiController;
+// NO: show each frame the moment it's decoded (lowest latency, may tear).
+// YES: present on the display's refresh (smoother).
+@property BOOL vsync;
 @property NSData* serverCert;
 
 @end

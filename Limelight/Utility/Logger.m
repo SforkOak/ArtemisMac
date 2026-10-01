@@ -8,7 +8,20 @@
 
 #import "Logger.h"
 
+#import <os/log.h>
+
 static LogLevel LoggerLogLevel = LOG_I;
+
+// Unified logging with public formatting, so `log stream --predicate 'subsystem == "com.sforkoak.artemis"'`
+// shows readable messages. Nothing secret may be logged at LOG_I or above.
+static os_log_t ArtemisLog(void) {
+    static os_log_t log;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        log = os_log_create("com.sforkoak.artemis", "app");
+    });
+    return log;
+}
 
 void LogTagv(LogLevel level, NSString* tag, NSString* fmt, va_list args);
 
@@ -57,5 +70,7 @@ void LogTagv(LogLevel level, NSString* tag, NSString* fmt, va_list args) {
     } else {
         prefixedString = [NSString stringWithFormat:@"%@ %@", levelPrefix, fmt];
     }
-    NSLogv(prefixedString, args);
+    NSString* message = [[NSString alloc] initWithFormat:prefixedString arguments:args];
+    os_log_type_t type = level == LOG_E ? OS_LOG_TYPE_ERROR : (level == LOG_D ? OS_LOG_TYPE_DEBUG : OS_LOG_TYPE_DEFAULT);
+    os_log_with_type(ArtemisLog(), type, "%{public}@", message);
 }

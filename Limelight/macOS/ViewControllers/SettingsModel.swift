@@ -209,7 +209,8 @@ class SettingsModel: ObservableObject {
         120,
         150
     ]
-    static var videoCodecs: [String] = ["H.264", "H.265"]
+    // New codecs are appended so indices saved in existing profiles keep their meaning
+    static var videoCodecs: [String] = ["H.264", "H.265", "AV1", "Automatic"]
     static var pacingOptions: [String] = ["Lowest Latency", "Smoothest Video"]
     static var multiControllerModes: [String] = ["Single", "Auto"]
 
@@ -231,9 +232,10 @@ class SettingsModel: ObservableObject {
         }
         return Float(bitrateIndex)
     }()
-    static let defaultVideoCodec = "H.264"
+    // Automatic lets the host pick the best codec both sides decode in hardware (AV1 > HEVC > H.264)
+    static let defaultVideoCodec = "Automatic"
     static let defaultHdr = false
-    static let defaultPacingOptions = "Smoothest Video"
+    static let defaultPacingOptions = "Lowest Latency"
     static let defaultAudioOnPC = false
     static let defaultVolumeLevel = 1.0
     static let defaultMultiControllerMode = "Auto"
