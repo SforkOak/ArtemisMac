@@ -6,11 +6,12 @@
 Tools/make-dmg.sh
 ```
 
-- **What it does:** builds Release into `~/Desktop/ClaudeScratch/DerivedData-dmg` and writes `~/Desktop/ClaudeScratch/dist/ArtemisMac-<version>-<build>-<commit>.dmg`, plus a `.sha256` file.
+- **What it does:** builds Release into `~/Desktop/ClaudeScratch/DerivedData-dmg.noindex` and writes `~/Desktop/ClaudeScratch/dist/ArtemisMac-<version>-<build>-<commit>.dmg`, plus a `.sha256` file.
 - **What's in the DMG:** `ArtemisMac.app` and a link to `/Applications`. The volume is HFS+, compressed with LZFSE (`ULFO`).
 - **Checks before packaging:** the bundle ID is `com.sforkoak.artemis.mac`; the build is arm64 only; the AWDL helper and its launchd plist are present; and the app, the helper and the frameworks are all signed by team `CHD882B8G5` with the hardened runtime.
 - **Checks after packaging:** the image verifies; the app inside it passes `codesign --verify --deep --strict` and has the same CDHash as the build.
 - **Leaving no trace:** the build is unregistered from LaunchServices so it can't take over `art://` links. Nothing is installed.
+  - The `.noindex` suffix matters. Outside one, the build was registered again within ~6 s of `lsregister -u`, probably via Spotlight indexing it. Inside one, it stayed unregistered.
 - **Options:** `--skip-build` packages the existing build; `--clean` does a clean build; `--derived-data DIR` and `--out DIR` change the paths. `ARTEMIS_SCRATCH` moves the scratch root.
 - **Uncommitted changes:** a working tree with uncommitted changes gives a `-dirty` name.
 

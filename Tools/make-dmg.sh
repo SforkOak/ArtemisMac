@@ -7,7 +7,7 @@
 #
 #   --skip-build        package the app already in DIR/Build/Products/Release
 #   --clean             clean build (default: incremental)
-#   --derived-data DIR  default: $ARTEMIS_SCRATCH/DerivedData-dmg
+#   --derived-data DIR  default: $ARTEMIS_SCRATCH/DerivedData-dmg.noindex
 #   --out DIR           default: $ARTEMIS_SCRATCH/dist
 #
 # ARTEMIS_SCRATCH defaults to ~/Desktop/ClaudeScratch; build logs go to its logs/.
@@ -22,7 +22,8 @@ LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchSe
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCRATCH="${ARTEMIS_SCRATCH:-$HOME/Desktop/ClaudeScratch}"
-DERIVED="$SCRATCH/DerivedData-dmg"
+# Outside a .noindex folder the build is re-registered with LaunchServices seconds after lsregister -u
+DERIVED="$SCRATCH/DerivedData-dmg.noindex"
 DIST="$SCRATCH/dist"
 BUILD=1
 CLEAN=
@@ -41,6 +42,11 @@ done
 
 die() { echo "error: $*" >&2; exit 1; }
 step() { echo "==> $*"; }
+
+case "$DERIVED" in
+    *.noindex|*.noindex/*) ;;
+    *) echo "warning: $DERIVED isn't in a .noindex folder, so the build will likely be re-registered as an art:// handler" >&2 ;;
+esac
 
 mkdir -p "$DIST" "$SCRATCH/logs"
 DIST="$(cd "$DIST" && pwd -P)"
