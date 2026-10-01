@@ -138,6 +138,7 @@
 				Network/ServerInfoResponse.m,
 				Network/WakeOnLanManager.m,
 				Stream/ApolloSession.m,
+				Stream/AudioRenderer.m,
 				Stream/Connection.m,
 				Stream/MetalVideoPresenter.m,
 				Stream/StreamConfiguration.m,

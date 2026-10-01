@@ -220,7 +220,9 @@ class SettingsModel: ObservableObject {
     static var multiControllerModes: [String] = ["Single", "Auto"]
 
     static var controllerDrivers: [String] = ["HID", "MFi"]
-    static var mouseDrivers: [String] = ["HID", "MFi"]
+    // Index 0 uses NSEvent deltas (with macOS pointer acceleration); index 1 uses
+    // GameController's raw, unaccelerated mouse input
+    static var mouseDrivers: [String] = ["System", "Raw"]
 
     static let defaultResolution = CGSizeMake(1920, 1080)
     static let defaultCustomResWidth: CGFloat? = nil
@@ -249,7 +251,7 @@ class SettingsModel: ObservableObject {
     static let defaultAutoFullscreen = true
     static let defaultRumble = true
     static let defaultControllerDriver = "HID"
-    static let defaultMouseDriver = "HID"
+    static let defaultMouseDriver = "Raw"
     static let defaultEmulateGuide = false
     static let defaultAppArtworkWidth: CGFloat? = nil
     static let defaultAppArtworkHeight: CGFloat? = nil

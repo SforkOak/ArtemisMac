@@ -399,9 +399,6 @@ typedef enum {
 @property (nonatomic, strong) NSDictionary *mappings;
 @property (nonatomic) IOHIDManagerRef hidManager;
 @property (nonatomic, strong) Controller *controller;
-@property (nonatomic) CVDisplayLinkRef displayLink;
-@property (atomic) CGFloat mouseDeltaX;
-@property (atomic) CGFloat mouseDeltaY;
 @property (nonatomic) UInt8 previousLowFreqMotor;
 @property (nonatomic) UInt8 previousHighFreqMotor;
 @property (atomic) UInt16 nextLowFreqMotor;
@@ -437,6 +434,12 @@ typedef enum {
 @property (nonatomic) id mouseDisconnectObserver;
 
 @property (nonatomic) BOOL useGCMouse;
+
+// Raw mouse input is handled on its own interactive queue instead of the main thread.
+// The remainders carry sub-pixel movement over to the next event.
+@property (nonatomic) dispatch_queue_t mouseQueue;
+@property (nonatomic) CGFloat mouseRemainderX;
+@property (nonatomic) CGFloat mouseRemainderY;
 @end
 
 @implementation HIDSupport
@@ -459,6 +462,9 @@ SwitchCommonOutputPacket_t switchRumblePacket;
         [self rumbleSync];
 
         self.controller = [[Controller alloc] init];
+
+        self.mouseQueue = dispatch_queue_create("com.sforkoak.artemis.mouse",
+                                                dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
         
         for (GCMouse *mouse in GCMouse.mice) {
             [self registerMouseCallbacks:mouse];
@@ -477,8 +483,6 @@ SwitchCommonOutputPacket_t switchRumblePacket;
             [d setObject:@(m.windows) forKey:@(m.mac)];
         }
         _mappings = [NSDictionary dictionaryWithDictionary:d];
-        
-//        [self initializeDisplayLink];
     }
     return self;
 }
@@ -492,37 +496,67 @@ SwitchCommonOutputPacket_t switchRumblePacket;
         return;
     }
     
+    // Raw, unaccelerated deltas straight from the mouse, delivered off the main thread
+    // and sent to the host the moment they arrive
+    mouse.handlerQueue = self.mouseQueue;
+    __weak typeof(self) weakSelf = self;
+
     mouse.mouseInput.mouseMovedHandler = ^(GCMouseInput * _Nonnull mouse, float deltaX, float deltaY) {
-        self.mouseDeltaX += deltaX;
-        self.mouseDeltaY -= deltaY;
+        [weakSelf sendRelativeMouseDeltaX:deltaX deltaY:-deltaY];
     };
     
     mouse.mouseInput.leftButton.pressedChangedHandler = ^(GCControllerButtonInput * _Nonnull button, float value, BOOL pressed) {
-        if (self.shouldSendInputEvents) {
+        if (weakSelf.shouldSendInputEvents) {
             LiSendMouseButtonEvent(pressed ? BUTTON_ACTION_PRESS : BUTTON_ACTION_RELEASE, BUTTON_LEFT);
         }
     };
     mouse.mouseInput.middleButton.pressedChangedHandler = ^(GCControllerButtonInput * _Nonnull button, float value, BOOL pressed) {
-        if (self.shouldSendInputEvents) {
+        if (weakSelf.shouldSendInputEvents) {
             LiSendMouseButtonEvent(pressed ? BUTTON_ACTION_PRESS : BUTTON_ACTION_RELEASE, BUTTON_MIDDLE);
         }
     };
     mouse.mouseInput.rightButton.pressedChangedHandler = ^(GCControllerButtonInput * _Nonnull button, float value, BOOL pressed) {
-        if (self.shouldSendInputEvents) {
+        if (weakSelf.shouldSendInputEvents) {
             LiSendMouseButtonEvent(pressed ? BUTTON_ACTION_PRESS : BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
         }
     };
     
-    mouse.mouseInput.auxiliaryButtons[0].pressedChangedHandler = ^(GCControllerButtonInput * _Nonnull button, float value, BOOL pressed) {
-        if (self.shouldSendInputEvents) {
-            LiSendMouseButtonEvent(pressed ? BUTTON_ACTION_PRESS : BUTTON_ACTION_RELEASE, BUTTON_X1);
-        }
-    };
-    mouse.mouseInput.auxiliaryButtons[1].pressedChangedHandler = ^(GCControllerButtonInput * _Nonnull button, float value, BOOL pressed) {
-        if (self.shouldSendInputEvents) {
-            LiSendMouseButtonEvent(pressed ? BUTTON_ACTION_PRESS : BUTTON_ACTION_RELEASE, BUTTON_X2);
-        }
-    };
+    NSArray<GCControllerButtonInput *> *auxiliaryButtons = mouse.mouseInput.auxiliaryButtons;
+    if (auxiliaryButtons.count > 0) {
+        auxiliaryButtons[0].pressedChangedHandler = ^(GCControllerButtonInput * _Nonnull button, float value, BOOL pressed) {
+            if (weakSelf.shouldSendInputEvents) {
+                LiSendMouseButtonEvent(pressed ? BUTTON_ACTION_PRESS : BUTTON_ACTION_RELEASE, BUTTON_X1);
+            }
+        };
+    }
+    if (auxiliaryButtons.count > 1) {
+        auxiliaryButtons[1].pressedChangedHandler = ^(GCControllerButtonInput * _Nonnull button, float value, BOOL pressed) {
+            if (weakSelf.shouldSendInputEvents) {
+                LiSendMouseButtonEvent(pressed ? BUTTON_ACTION_PRESS : BUTTON_ACTION_RELEASE, BUTTON_X2);
+            }
+        };
+    }
+}
+
+// Sends relative movement, carrying the fractional part over so slow, precise
+// movements aren't lost to integer truncation
+- (void)sendRelativeMouseDeltaX:(CGFloat)deltaX deltaY:(CGFloat)deltaY {
+    if (!self.shouldSendInputEvents) {
+        self.mouseRemainderX = 0;
+        self.mouseRemainderY = 0;
+        return;
+    }
+
+    CGFloat x = deltaX + self.mouseRemainderX;
+    CGFloat y = deltaY + self.mouseRemainderY;
+    short wholeX = (short)MAX(SHRT_MIN, MIN(SHRT_MAX, trunc(x)));
+    short wholeY = (short)MAX(SHRT_MIN, MIN(SHRT_MAX, trunc(y)));
+    self.mouseRemainderX = x - wholeX;
+    self.mouseRemainderY = y - wholeY;
+
+    if (wholeX != 0 || wholeY != 0) {
+        LiSendMouseMoveEvent(wholeX, wholeY);
+    }
 }
 
 -(void)unregisterMouseCallbacks:(GCMouse*)mouse API_AVAILABLE(macos(11.0)) {
@@ -545,61 +579,6 @@ SwitchCommonOutputPacket_t switchRumblePacket;
     if (self.shouldSendInputEvents) {
         LiSendMultiControllerEvent(self.controller.playerIndex, 1, self.controller.lastButtonFlags, self.controller.lastLeftTrigger, self.controller.lastRightTrigger, self.controller.lastLeftStickX, self.controller.lastLeftStickY, self.controller.lastRightStickX, self.controller.lastRightStickY);
     }
-}
-
-static CVReturn displayLinkOutputCallback(CVDisplayLinkRef displayLink,
-                                          const CVTimeStamp *now,
-                                          const CVTimeStamp *vsyncTime,
-                                          CVOptionFlags flagsIn,
-                                          CVOptionFlags *flagsOut,
-                                          void *displayLinkContext)
-{
-    HIDSupport *me = (__bridge HIDSupport *)displayLinkContext;
-    if (me == nil) {
-        return kCVReturnError;
-    }
-
-    int32_t deltaX, deltaY;
-    deltaX = me.mouseDeltaX;
-    deltaY = me.mouseDeltaY;
-    if (deltaX != 0 || deltaY != 0) {
-        me.mouseDeltaX = 0;
-        me.mouseDeltaY = 0;
-        if (me.shouldSendInputEvents) {
-            LiSendMouseMoveEvent(deltaX, deltaY);
-        }
-    }
-
-    return kCVReturnSuccess;
-}
-
-- (BOOL)initializeDisplayLink
-{
-    NSNumber *screenNumber = [[NSScreen mainScreen] deviceDescription][@"NSScreenNumber"];
-
-    CGDirectDisplayID displayId = [screenNumber unsignedIntValue];
-    CVDisplayLinkRef displayLink;
-    CVReturn status = CVDisplayLinkCreateWithCGDisplay(displayId, &displayLink);
-    if (status != kCVReturnSuccess) {
-        Log(LOG_E, @"Failed to create CVDisplayLink: %d", status);
-        return NO;
-    }
-    self.displayLink = displayLink;
-    
-    __weak typeof(self) weakSelf = self;
-    status = CVDisplayLinkSetOutputCallback(self.displayLink, displayLinkOutputCallback, (__bridge void * _Nullable)(weakSelf));
-    if (status != kCVReturnSuccess) {
-        Log(LOG_E, @"CVDisplayLinkSetOutputCallback() failed: %d", status);
-        return NO;
-    }
-    
-    status = CVDisplayLinkStart(self.displayLink);
-    if (status != kCVReturnSuccess) {
-        Log(LOG_E, @"CVDisplayLinkStart() failed: %d", status);
-        return NO;
-    }
-    
-    return YES;
 }
 
 - (int)sendKeyboardModifierEvent:(NSEvent *)event withKeyCode:(unsigned short)keyCode andModifierFlag:(NSEventModifierFlags)modifierFlag {
@@ -692,9 +671,7 @@ static CVReturn displayLinkOutputCallback(CVDisplayLinkRef displayLink,
     }
     
     if (event.deltaX != 0 || event.deltaY != 0) {
-        if (self.shouldSendInputEvents) {
-            LiSendMouseMoveEvent(event.deltaX, event.deltaY);
-        }
+        [self sendRelativeMouseDeltaX:event.deltaX deltaY:event.deltaY];
     }
 }
 
@@ -1827,11 +1804,6 @@ void myHIDDeviceRemovalCallback(void * _Nullable        context,
 
     for (GCMouse *mouse in GCMouse.mice) {
         [self unregisterMouseCallbacks:mouse];
-    }
-    
-    if (self.displayLink != NULL) {
-        CVDisplayLinkStop(self.displayLink);
-        CVDisplayLinkRelease(self.displayLink);
     }
     
     self.closeRumble = YES;

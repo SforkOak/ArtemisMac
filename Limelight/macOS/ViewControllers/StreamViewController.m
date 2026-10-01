@@ -20,6 +20,7 @@
 #import "VideoDecoderRenderer.h"
 #import "HIDSupport.h"
 #import "ApolloSession.h"
+#import "AudioRenderer.h"
 
 #import "Moonlight-Swift.h"
 
@@ -510,11 +511,13 @@ static NSString *const kShowStatsDefaultsKey = @"showStreamStats";
         @"Decode       %5.1f ms\n"
         @"Present      %5.1f ms\n"
         @"Client total %5.1f ms (max %.1f)\n"
+        @"Audio queue  %5u ms\n"
         @"Frames %u in, %u shown, %u lost, %u dropped, %u skipped",
         videoStats.streamDescription ?: @"",
         s.rttMs, s.rttVarianceMs,
         s.hostLatencyMs, s.networkReceiveMs + s.queueDelayMs, s.decodeMs, s.renderMs,
         s.clientTotalMs, s.maxClientTotalMs,
+        ArtemisAudioQueuedMs(),
         s.framesReceived, s.framesPresented, s.framesLostInNetwork, s.framesDroppedByDecoder, s.framesSuperseded];
 
     if (self.statsOverlay != nil && !self.statsOverlay.hidden) {

@@ -7,6 +7,7 @@
 //
 
 #import "Connection.h"
+#import "AudioRenderer.h"
 #import "Utils.h"
 
 #import "Moonlight-Swift.h"
@@ -31,31 +32,8 @@
 }
 
 static NSLock* initLock;
-static OpusMSDecoder* opusDecoder;
 static id<ConnectionCallbacks> _callbacks;
-
-#define OUTPUT_BUS 0
-
-// My iPod touch 5th Generation seems to really require 80 ms
-// of buffering to deliver glitch-free playback :(
-// FIXME: Maybe we can use a smaller buffer on more modern iOS versions?
-#define CIRCULAR_BUFFER_DURATION 80
-
-static int audioBufferEntries;
-static int audioBufferWriteIndex;
-static int audioBufferReadIndex;
-static int audioBufferStride;
-static int audioSamplesPerFrame;
-static short* audioCircularBuffer;
-
-static int channelCount;
-static float audioVolumeMultiplier = 1.0f;
 static NSString *hostAddress;
-
-#define AUDIO_QUEUE_BUFFERS 4
-
-static AudioQueueRef audioQueue;
-static AudioQueueBufferRef audioBuffers[AUDIO_QUEUE_BUFFERS];
 static VideoDecoderRenderer* renderer;
 
 int DrDecoderSetup(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags)
@@ -90,178 +68,25 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit)
     return [renderer submitDecodeUnit:decodeUnit];
 }
 
-int ArInit(int audioConfiguration, POPUS_MULTISTREAM_CONFIGURATION originalOpusConfig, void* context, int flags)
+int ArInit(int audioConfiguration, POPUS_MULTISTREAM_CONFIGURATION opusConfig, void* context, int flags)
 {
-    int err;
-    AudioChannelLayout channelLayout = {};
-    OPUS_MULTISTREAM_CONFIGURATION opusConfig = *originalOpusConfig;
-    
-    // Initialize the circular buffer
-    audioBufferWriteIndex = audioBufferReadIndex = 0;
-    audioSamplesPerFrame = opusConfig.samplesPerFrame;
-    audioBufferStride = opusConfig.channelCount * opusConfig.samplesPerFrame;
-    audioBufferEntries = CIRCULAR_BUFFER_DURATION / (opusConfig.samplesPerFrame / (opusConfig.sampleRate / 1000));
-    audioCircularBuffer = malloc(audioBufferEntries * audioBufferStride * sizeof(short));
-    if (audioCircularBuffer == NULL) {
-        Log(LOG_E, @"Error allocating output queue\n");
-        return -1;
-    }
-    
-    channelCount = opusConfig.channelCount;
-    
-    switch (opusConfig.channelCount) {
-        case 2:
-            channelLayout.mChannelLayoutTag = kAudioChannelLayoutTag_Stereo;
-            break;
-        case 4:
-            channelLayout.mChannelLayoutTag = kAudioChannelLayoutTag_Quadraphonic;
-            break;
-        case 6:
-            channelLayout.mChannelLayoutTag = kAudioChannelLayoutTag_AudioUnit_5_1;
-            break;
-        case 8:
-            channelLayout.mChannelLayoutTag = kAudioChannelLayoutTag_AudioUnit_7_1;
-            
-            // Swap SL/SR and RL/RR to match the selected channel layout
-            opusConfig.mapping[4] = originalOpusConfig->mapping[6];
-            opusConfig.mapping[5] = originalOpusConfig->mapping[7];
-            opusConfig.mapping[6] = originalOpusConfig->mapping[4];
-            opusConfig.mapping[7] = originalOpusConfig->mapping[5];
-            break;
-        default:
-            // Unsupported channel layout
-            Log(LOG_E, @"Unsupported channel layout: %d\n", opusConfig.channelCount);
-            abort();
-    }
-    
-    opusDecoder = opus_multistream_decoder_create(opusConfig.sampleRate,
-                                                  opusConfig.channelCount,
-                                                  opusConfig.streams,
-                                                  opusConfig.coupledStreams,
-                                                  opusConfig.mapping,
-                                                  &err);
-
-#if TARGET_OS_IPHONE
-    // Configure the audio session for our app
-    NSError *audioSessionError = nil;
-    AVAudioSession* audioSession = [AVAudioSession sharedInstance];
-
-    [audioSession setPreferredSampleRate:opusConfig.sampleRate error:&audioSessionError];
-    [audioSession setCategory:AVAudioSessionCategoryPlayback
-                  withOptions:AVAudioSessionCategoryOptionMixWithOthers
-                        error:&audioSessionError];
-    [audioSession setPreferredIOBufferDuration:(opusConfig.samplesPerFrame / (opusConfig.sampleRate / 1000)) / 1000.0
-                                         error:&audioSessionError];
-    [audioSession setActive: YES error: &audioSessionError];
-    
-    // FIXME: Calling this breaks surround audio for some reason
-    //[audioSession setPreferredOutputNumberOfChannels:opusConfig->channelCount error:&audioSessionError];
-#endif
-
-    OSStatus status;
-    
-    AudioStreamBasicDescription audioFormat = {0};
-    audioFormat.mSampleRate = opusConfig.sampleRate;
-    audioFormat.mBitsPerChannel = 16;
-    audioFormat.mFormatID = kAudioFormatLinearPCM;
-    audioFormat.mFormatFlags = kAudioFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked;
-    audioFormat.mChannelsPerFrame = opusConfig.channelCount;
-    audioFormat.mBytesPerFrame = audioFormat.mChannelsPerFrame * (audioFormat.mBitsPerChannel / 8);
-    audioFormat.mBytesPerPacket = audioFormat.mBytesPerFrame;
-    audioFormat.mFramesPerPacket = audioFormat.mBytesPerPacket / audioFormat.mBytesPerFrame;
-    audioFormat.mReserved = 0;
-
-    status = AudioQueueNewOutput(&audioFormat, FillOutputBuffer, nil, nil, nil, 0, &audioQueue);
-    if (status != noErr) {
-        Log(LOG_E, @"Error allocating output queue: %d\n", status);
-        return status;
-    }
-    
-    // We need to specify a channel layout for surround sound configurations
-    status = AudioQueueSetProperty(audioQueue, kAudioQueueProperty_ChannelLayout, &channelLayout, sizeof(channelLayout));
-    if (status != noErr) {
-        Log(LOG_E, @"Error configuring surround channel layout: %d\n", status);
-        return status;
-    }
-    
-    for (int i = 0; i < AUDIO_QUEUE_BUFFERS; i++) {
-        status = AudioQueueAllocateBuffer(audioQueue, audioFormat.mBytesPerFrame * opusConfig.samplesPerFrame, &audioBuffers[i]);
-        if (status != noErr) {
-            Log(LOG_E, @"Error allocating output buffer: %d\n", status);
-            return status;
-        }
-        
-        FillOutputBuffer(nil, audioQueue, audioBuffers[i]);
-    }
-    
-    status = AudioQueueStart(audioQueue, nil);
-    if (status != noErr) {
-        Log(LOG_E, @"Error starting queue: %d\n", status);
-        return status;
-    }
-    
-    return status;
+    return ArtemisAudioInit(opusConfig);
 }
 
 void ArCleanup(void)
 {
-    if (opusDecoder != NULL) {
-        opus_multistream_decoder_destroy(opusDecoder);
-        opusDecoder = NULL;
-    }
-    
-    // Stop before disposing to avoid massive delay inside
-    // AudioQueueDispose() (iOS bug?)
-    AudioQueueStop(audioQueue, true);
-    
-    // Also frees buffers
-    AudioQueueDispose(audioQueue, true);
-    
-    // Must be freed after the queue is stopped
-    if (audioCircularBuffer != NULL) {
-        free(audioCircularBuffer);
-        audioCircularBuffer = NULL;
-    }
-    
-#if TARGET_OS_IPHONE
-    // Audio session is now inactive
-    [[AVAudioSession sharedInstance] setActive: NO error: nil];
-#endif
+    ArtemisAudioCleanup();
 }
 
 void ArDecodeAndPlaySample(char* sampleData, int sampleLength)
 {
-    int decodeLen;
-    
-    // Check if there is space for this sample in the buffer. Again, this can race
-    // but in the worst case, we'll not see the sample callback having consumed a sample.
-    if (((audioBufferWriteIndex + 1) % audioBufferEntries) == audioBufferReadIndex) {
-        return;
-    }
-    
-    decodeLen = opus_multistream_decode(opusDecoder, (unsigned char *)sampleData, sampleLength,
-                                        (short*)&audioCircularBuffer[audioBufferWriteIndex * audioBufferStride], audioSamplesPerFrame, 0);
-    if (decodeLen > 0) {
-        // Apply volume adjustment to each audio sample
-        short* buffer = &audioCircularBuffer[audioBufferWriteIndex * audioBufferStride];
-        for (int i = 0; i < decodeLen * channelCount; i++) {
-            buffer[i] = (short)(buffer[i] * audioVolumeMultiplier);
-        }
-        
-        // Use a full memory barrier to ensure the circular buffer is written before incrementing the index
-        __sync_synchronize();
-        
-        // This can race with the reader in the sample callback, however this is a benign
-        // race since we'll either read the original value of s_WriteIndex (which is safe,
-        // we just won't consider this sample) or the new value of s_WriteIndex
-        audioBufferWriteIndex = (audioBufferWriteIndex + 1) % audioBufferEntries;
-    }
+    ArtemisAudioDecodeAndPlay(sampleData, sampleLength);
 }
 
 - (void)updateVolume {
     if (hostAddress != nil) {
         NSString *uuid = [SettingsClass getHostUUIDFrom:hostAddress];
-        audioVolumeMultiplier = [SettingsClass volumeLevelFor:uuid];
+        ArtemisAudioSetVolume([SettingsClass volumeLevelFor:uuid]);
     }
 }
 
@@ -442,35 +267,6 @@ void ClSetHdrMode(bool enabled)
     _clCallbacks.setHdrMode = ClSetHdrMode;
 
     return self;
-}
-
-static void FillOutputBuffer(void *aqData,
-                             AudioQueueRef inAQ,
-                             AudioQueueBufferRef inBuffer) {
-    inBuffer->mAudioDataByteSize = audioBufferStride * sizeof(short);
-    
-    assert(inBuffer->mAudioDataByteSize == inBuffer->mAudioDataBytesCapacity);
-    
-    // If the indexes aren't equal, we have a sample
-    if (audioBufferWriteIndex != audioBufferReadIndex) {
-        // Copy data to the audio buffer
-        memcpy(inBuffer->mAudioData,
-               &audioCircularBuffer[audioBufferReadIndex * audioBufferStride],
-               inBuffer->mAudioDataByteSize);
-        
-        // Use a full memory barrier to ensure the circular buffer is read before incrementing the index
-        __sync_synchronize();
-        
-        // This can race with the reader in the AudDecDecodeAndPlaySample function. This is
-        // not a problem because at worst, it just won't see that we've consumed this sample yet.
-        audioBufferReadIndex = (audioBufferReadIndex + 1) % audioBufferEntries;
-    }
-    else {
-        // No data, so play silence
-        memset(inBuffer->mAudioData, 0, inBuffer->mAudioDataByteSize);
-    }
-    
-    AudioQueueEnqueueBuffer(inAQ, inBuffer, 0, NULL);
 }
 
 -(void) main
