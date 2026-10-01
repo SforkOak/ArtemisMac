@@ -62,7 +62,29 @@ static NSString *const kHelperRequirement =
     _pollTimer = [NSTimer scheduledTimerWithTimeInterval:2.0 repeats:YES block:^(NSTimer *timer) {
         [weakSelf refresh];
     }];
+    if (self.suppressionEnabled) {
+        [self registerHelperOpeningSettingsIfNeeded:NO];
+    }
     [self refresh];
+}
+
+// Returns NO if registration failed outright
+- (BOOL)registerHelperOpeningSettingsIfNeeded:(BOOL)openSettings {
+    SMAppService *service = [self helperService];
+    if (service.status == SMAppServiceStatusEnabled) {
+        return YES;
+    }
+
+    NSError *error = nil;
+    if (![service registerAndReturnError:&error] && service.status != SMAppServiceStatusRequiresApproval) {
+        Log(LOG_E, @"Couldn't register the AWDL helper: %@", error);
+        _lastError = error.localizedDescription;
+        return NO;
+    }
+    if (service.status == SMAppServiceStatusRequiresApproval && openSettings) {
+        [SMAppService openSystemSettingsLoginItems];
+    }
+    return YES;
 }
 
 - (void)setSuppressionEnabled:(BOOL)enabled {
@@ -70,17 +92,7 @@ static NSString *const kHelperRequirement =
     _lastError = nil;
 
     if (enabled) {
-        SMAppService *service = [self helperService];
-        if (service.status != SMAppServiceStatusEnabled) {
-            NSError *error = nil;
-            if (![service registerAndReturnError:&error] && service.status != SMAppServiceStatusRequiresApproval) {
-                Log(LOG_E, @"Couldn't register the AWDL helper: %@", error);
-                _lastError = error.localizedDescription;
-            }
-            if (service.status == SMAppServiceStatusRequiresApproval) {
-                [SMAppService openSystemSettingsLoginItems];
-            }
-        }
+        [self registerHelperOpeningSettingsIfNeeded:YES];
     } else {
         [self tellHelperToSuppress:NO];
     }

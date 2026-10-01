@@ -7,6 +7,7 @@
 //
 
 #import "CryptoManager.h"
+#import "DatabaseSingleton.h"
 #import "mkcert.h"
 
 #include <openssl/sha.h>
@@ -173,9 +174,7 @@ static NSData* p12 = nil;
 #if TARGET_OS_TV
     return [[NSUserDefaults standardUserDefaults] dataForKey:item];
 #else
-    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-    NSString *documentsDirectory = [paths objectAtIndex:0];
-    NSString *file = [documentsDirectory stringByAppendingPathComponent:item];
+    NSString *file = [[DatabaseSingleton applicationSupportDirectory].path stringByAppendingPathComponent:item];
     return [NSData dataWithContentsOfFile:file];
 #endif
 }
@@ -184,10 +183,10 @@ static NSData* p12 = nil;
 #if TARGET_OS_TV
     [[NSUserDefaults standardUserDefaults] setObject:data forKey:item];
 #else
-    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-    NSString *documentsDirectory = [paths objectAtIndex:0];
-    NSString *file = [documentsDirectory stringByAppendingPathComponent:item];
-    [data writeToFile:file atomically:NO];
+    // The client's private key lives here, so keep it readable by this user only
+    NSString *file = [[DatabaseSingleton applicationSupportDirectory].path stringByAppendingPathComponent:item];
+    [data writeToFile:file atomically:YES];
+    [[NSFileManager defaultManager] setAttributes:@{NSFilePosixPermissions: @0600} ofItemAtPath:file error:nil];
 #endif
 }
 

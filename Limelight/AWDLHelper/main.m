@@ -25,7 +25,7 @@
 static const char *kInterfaceName = "awdl0";
 // Only Artemis, signed by its developer team, may talk to the helper
 static NSString *const kClientRequirement =
-    @"identifier \"com.sforkoak.artemis\" and anchor apple generic and certificate leaf[subject.OU] = \"CHD882B8G5\"";
+    @"identifier \"com.sforkoak.artemis.mac\" and anchor apple generic and certificate leaf[subject.OU] = \"CHD882B8G5\"";
 
 static os_log_t sLog;
 static dispatch_queue_t sQueue;
