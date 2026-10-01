@@ -62,6 +62,8 @@ Because a sandboxed app can only register sandboxed helpers, ArtemisMac doesn't 
 
 Unit tests for the plain-C video code: `Tests/run-tests.sh`.
 
+To make a drag-to-Applications DMG: `Tools/make-dmg.sh`. [Tools/PACKAGING.md](Tools/PACKAGING.md) covers signing, what Gatekeeper shows, notarization, and moving an installed copy without breaking the AWDL helper.
+
 `moonlight-common-c` comes from [SforkOak/moonlight-common-c](https://github.com/SforkOak/moonlight-common-c/tree/apollo) (`apollo` branch). It's upstream plus ClassicOldSong's Apollo control-stream extensions (server commands and the Wi-Fi keepalive).
 
 ## Acknowledgements
