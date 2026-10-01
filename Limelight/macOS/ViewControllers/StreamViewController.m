@@ -41,6 +41,7 @@
 @property (nonatomic, strong) NSTextField *statsOverlay;
 @property (nonatomic, strong) NSTimer *statsTimer;
 @property (nonatomic) NSUInteger statsTicks;
+@property (nonatomic, strong) id<NSObject> streamActivity;
 @property (nonatomic, readonly) StreamViewMac *streamView;
 @property (nonatomic, strong) id windowDidExitFullScreenNotification;
 @property (nonatomic, strong) id windowDidEnterFullScreenNotification;
@@ -121,6 +122,7 @@
             // Stop the keepalive and stats before the connection is torn down
             [weakSelf.apolloSession streamWillStop];
             [weakSelf stopStatsTimer];
+            [weakSelf endStreamActivity];
             [weakSelf removeApolloMenu];
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 if (weakSelf.useSystemControllerDriver) {
@@ -158,6 +160,7 @@
 
     [self removeApolloMenu];
     [self stopStatsTimer];
+    [self endStreamActivity];
     [self.hidSupport tearDownHidManager];
     self.hidSupport = nil;
 }
@@ -435,6 +438,16 @@
 }
 
 
+#pragma mark - Stream activity
+
+- (void)endStreamActivity {
+    if (self.streamActivity != nil) {
+        [NSProcessInfo.processInfo endActivity:self.streamActivity];
+        self.streamActivity = nil;
+    }
+}
+
+
 #pragma mark - Performance stats
 
 static NSString *const kShowStatsDefaultsKey = @"showStreamStats";
@@ -620,6 +633,7 @@ static NSString *const kShowStatsDefaultsKey = @"showStreamStats";
     dispatch_async(dispatch_get_main_queue(), ^{
         [self.apolloSession streamWillStop];
         [self stopStatsTimer];
+        [self endStreamActivity];
         [self uncaptureMouse];
 
         [self.delegate appDidQuit:self.app];
@@ -746,6 +760,13 @@ static NSString *const kShowStatsDefaultsKey = @"showStreamStats";
         [self.apolloSession streamStarted];
         [self installApolloMenu];
         [self startStatsTimer];
+
+        // Keep macOS from coalescing timers, napping the app or dimming the display
+        // while streaming
+        if (self.streamActivity == nil) {
+            self.streamActivity = [NSProcessInfo.processInfo beginActivityWithOptions:NSActivityLatencyCritical | NSActivityUserInitiated | NSActivityIdleDisplaySleepDisabled
+                                                                               reason:@"Streaming"];
+        }
 
         if ([SettingsClass autoFullscreenFor:self.app.host.uuid]) {
             if (!(self.view.window.styleMask & NSWindowStyleMaskFullScreen)) {
