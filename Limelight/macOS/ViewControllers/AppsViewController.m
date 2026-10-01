@@ -352,7 +352,12 @@ const CGFloat scaleBase = 1.125;
     for (TemporaryApp *app in self.host.appList) {
         if (app.uuid != nil && [app.uuid caseInsensitiveCompare:uuid] == NSOrderedSame) {
             self.pendingLaunchAppUUID = nil;
-            [self openApp:app];
+            // When a link opens the app, the host's running app usually isn't known yet.
+            // openApp needs it to offer a restart if the running session's settings differ.
+            __weak typeof(self) weakSelf = self;
+            [self updateRunningAppStateWithCompletion:^{
+                [weakSelf openApp:app];
+            }];
             return;
         }
     }
@@ -628,6 +633,11 @@ static const CGFloat runningAnimationDuration = 1.0;
 }
 
 - (void)updateRunningAppState {
+    [self updateRunningAppStateWithCompletion:nil];
+}
+
+// completion runs on the main queue once runningApp reflects the host's current state
+- (void)updateRunningAppStateWithCompletion:(void (^_Nullable)(void))completion {
     __weak typeof(self) weakSelf = self;
     NSOperation *operation = [NSBlockOperation blockOperationWithBlock:^{
         DiscoveryWorker *worker = [[DiscoveryWorker alloc] initWithHost:weakSelf.host uniqueId:[IdManager getUniqueId]];
@@ -635,6 +645,9 @@ static const CGFloat runningAnimationDuration = 1.0;
         dispatch_async(dispatch_get_main_queue(), ^{
             TemporaryApp *runningApp = [weakSelf findRunningApp:weakSelf.host];
             [weakSelf setRunningApp:runningApp];
+            if (completion != nil) {
+                completion();
+            }
         });
     }];
     NSOperationQueue *queue = [[NSOperationQueue alloc] init];
