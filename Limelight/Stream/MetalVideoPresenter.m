@@ -5,6 +5,7 @@
 
 #import "MetalVideoPresenter.h"
 
+#import <CoreText/CoreText.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
 #import <os/lock.h>
@@ -60,7 +61,26 @@ static NSString *const kVideoShaderSource = @
     "                        dot(yuv, csc.row1.xyz),\n"
     "                        dot(yuv, csc.row2.xyz));\n"
     "    return float4(saturate(rgb), 1.0);\n"
+    "}\n"
+    "\n"
+    "// The stats overlay: a premultiplied BGRA texture drawn 1:1 over the video\n"
+    "fragment float4 overlayFragment(VertexOut in [[stage_in]],\n"
+    "                                texture2d<float> overlayTexture [[texture(0)]],\n"
+    "                                constant float &whiteLevel [[buffer(0)]]) {\n"
+    "    constexpr sampler s(address::clamp_to_edge, filter::nearest);\n"
+    "\n"
+    "    float4 color = overlayTexture.sample(s, in.texCoord);\n"
+    "    return float4(color.rgb * whiteLevel, color.a);\n"
     "}\n";
+
+// Stats overlay layout, in points: the same place and look as the text field it replaced
+static const CGFloat kOverlayMargin = 8;
+static const CGFloat kOverlayPadding = 4;
+static const CGFloat kOverlayFontSize = 12;
+// In an HDR (PQ) drawable, overlay white is drawn at this PQ value: ~200 nits, about SDR white
+static const float kOverlayPqWhite = 0.58f;
+// A changed overlay redraws the last frame once the stream has gone this long without one
+static const uint64_t kOverlayRedrawAfterUs = 250000;
 
 #pragma mark - Metal view
 
@@ -135,6 +155,7 @@ static NSString *const kVideoShaderSource = @
     id<MTLCommandQueue> _commandQueue;
     id<MTLLibrary> _library;
     id<MTLRenderPipelineState> _pipeline;
+    id<MTLRenderPipelineState> _overlayPipeline;
     MTLPixelFormat _pipelinePixelFormat;
     CVMetalTextureCacheRef _textureCache;
 
@@ -163,6 +184,15 @@ static NSString *const kVideoShaderSource = @
     BOOL _keepAliveWanted;
     BOOL _windowed;
     atomic_bool _keepAliveActive;
+
+    // Stats overlay. The texture and its origin (top-left, in drawable pixels) are set on the
+    // main thread under _overlayLock. _lastFrame and _lastFrameRenderUs are render thread only.
+    os_unfair_lock _overlayLock;
+    id<MTLTexture> _overlayTexture;
+    CGPoint _overlayOrigin;
+    atomic_bool _overlayChanged;
+    CVPixelBufferRef _lastFrame;
+    uint64_t _lastFrameRenderUs;
 }
 
 - (instancetype)initWithContainerView:(NSView *)containerView stats:(VideoStats *)stats {
@@ -192,6 +222,7 @@ static NSString *const kVideoShaderSource = @
 
     _stats = stats;
     _slotLock = OS_UNFAIR_LOCK_INIT;
+    _overlayLock = OS_UNFAIR_LOCK_INIT;
     _frameAvailable = dispatch_semaphore_create(0);
     _threadExited = dispatch_semaphore_create(0);
 
@@ -337,6 +368,10 @@ static NSString *const kVideoShaderSource = @
                     [self presentKeepAlive];
                 }
                 [self scheduleKeepAliveAfterNewFrame:NO];
+            } else if (atomic_exchange(&_overlayChanged, false)) {
+                @autoreleasepool {
+                    [self redrawLastFrameForOverlay];
+                }
             }
             continue;
         }
@@ -347,6 +382,10 @@ static NSString *const kVideoShaderSource = @
         [self scheduleKeepAliveAfterNewFrame:YES];
     }
 
+    if (_lastFrame != NULL) {
+        CVPixelBufferRelease(_lastFrame);
+        _lastFrame = NULL;
+    }
     dispatch_semaphore_signal(_threadExited);
 }
 
@@ -384,9 +423,17 @@ static NSString *const kVideoShaderSource = @
     }
 
     if (drawable != nil) {
+        // This frame carries the current overlay
+        atomic_store(&_overlayChanged, false);
         [self renderFrame:frame timing:&timing drawable:drawable drawableWaitUs:drawableWaitUs];
     }
-    CVPixelBufferRelease(frame);
+
+    // Kept for redrawing the overlay if the stream stalls
+    if (_lastFrame != NULL) {
+        CVPixelBufferRelease(_lastFrame);
+    }
+    _lastFrame = frame;
+    _lastFrameRenderUs = [VideoStats nowUs];
 }
 
 
@@ -488,6 +535,125 @@ static NSString *const kVideoShaderSource = @
 }
 
 
+#pragma mark - Stats overlay
+
+- (void)setOverlayText:(NSString *)text {
+    NSAssert(NSThread.isMainThread, @"setOverlayText: must be called on the main thread");
+
+    CGFloat scale = _view.metalLayer.contentsScale;
+    id<MTLTexture> texture = text.length > 0 ? [self overlayTextureWithText:text scale:scale] : nil;
+    CGPoint origin = CGPointMake(round(kOverlayMargin * scale), round((_view.safeAreaInsets.top + kOverlayMargin) * scale));
+
+    os_unfair_lock_lock(&_overlayLock);
+    BOOL changed = texture != nil || _overlayTexture != nil;
+    _overlayTexture = texture;
+    _overlayOrigin = origin;
+    os_unfair_lock_unlock(&_overlayLock);
+
+    if (changed) {
+        atomic_store(&_overlayChanged, true);
+        dispatch_semaphore_signal(_frameAvailable);
+    }
+}
+
+// White text on a translucent black box, rendered with Core Text at the display's scale
+- (nullable id<MTLTexture>)overlayTextureWithText:(NSString *)text scale:(CGFloat)scale {
+    NSFont *font = [NSFont monospacedSystemFontOfSize:kOverlayFontSize weight:NSFontWeightMedium];
+    NSAttributedString *string = [[NSAttributedString alloc] initWithString:text attributes:@{
+        (id)kCTFontAttributeName: font,
+        (id)kCTForegroundColorAttributeName: (id)NSColor.whiteColor.CGColor,
+    }];
+    CTFramesetterRef framesetter = CTFramesetterCreateWithAttributedString((CFAttributedStringRef)string);
+    CGFloat maxWidth = MAX(_view.bounds.size.width - 2 * (kOverlayMargin + kOverlayPadding), 1);
+    CGSize textSize = CTFramesetterSuggestFrameSizeWithConstraints(framesetter, CFRangeMake(0, 0), NULL, CGSizeMake(maxWidth, CGFLOAT_MAX), NULL);
+    textSize = CGSizeMake(ceil(textSize.width), ceil(textSize.height));
+
+    size_t width = (size_t)ceil((textSize.width + 2 * kOverlayPadding) * scale);
+    size_t height = (size_t)ceil((textSize.height + 2 * kOverlayPadding) * scale);
+    CGColorSpaceRef colorspace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGContextRef context = CGBitmapContextCreate(NULL, width, height, 8, 0, colorspace,
+                                                 (CGBitmapInfo)kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+    CGColorSpaceRelease(colorspace);
+    if (context == NULL) {
+        CFRelease(framesetter);
+        return nil;
+    }
+
+    CGContextSetRGBFillColor(context, 0, 0, 0, 0.6);
+    CGContextFillRect(context, CGRectMake(0, 0, width, height));
+    CGContextScaleCTM(context, scale, scale);
+    CGPathRef path = CGPathCreateWithRect(CGRectMake(kOverlayPadding, kOverlayPadding, textSize.width, textSize.height), NULL);
+    CTFrameRef frame = CTFramesetterCreateFrame(framesetter, CFRangeMake(0, 0), path, NULL);
+    CTFrameDraw(frame, context);
+    CFRelease(frame);
+    CGPathRelease(path);
+    CFRelease(framesetter);
+
+    // A new texture each time, so a frame still being drawn never sees a half-updated one
+    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                          width:width
+                                                                                         height:height
+                                                                                      mipmapped:NO];
+    descriptor.usage = MTLTextureUsageShaderRead;
+    descriptor.storageMode = MTLStorageModeShared;
+    id<MTLTexture> texture = [_device newTextureWithDescriptor:descriptor];
+    [texture replaceRegion:MTLRegionMake2D(0, 0, width, height)
+               mipmapLevel:0
+                 withBytes:CGBitmapContextGetData(context)
+               bytesPerRow:CGBitmapContextGetBytesPerRow(context)];
+    CGContextRelease(context);
+    return texture;
+}
+
+// Render thread. While the stream is stalled, a changed overlay would otherwise wait for the
+// next frame. The redraw isn't counted as a presented frame.
+- (void)redrawLastFrameForOverlay {
+    if (_lastFrame == NULL || [VideoStats nowUs] - _lastFrameRenderUs < kOverlayRedrawAfterUs) {
+        return;
+    }
+    uint64_t drawableWaitUs = 0;
+    id<CAMetalDrawable> drawable = [self nextDrawableWaitingUs:&drawableWaitUs];
+    if (drawable != nil && [self frameWantsHdr:_lastFrame] == _hdrOutput) {
+        [self renderFrame:_lastFrame timing:NULL drawable:drawable drawableWaitUs:0];
+    }
+}
+
+// Draws the overlay over the video in the current pass
+- (void)encodeOverlay:(id<MTLRenderCommandEncoder>)encoder drawable:(id<CAMetalDrawable>)drawable {
+    os_unfair_lock_lock(&_overlayLock);
+    id<MTLTexture> texture = _overlayTexture;
+    CGPoint origin = _overlayOrigin;
+    os_unfair_lock_unlock(&_overlayLock);
+    if (texture == nil) {
+        return;
+    }
+
+    // Crop rather than squash it if the window has become smaller than the text
+    double width = MIN((double)texture.width, (double)drawable.texture.width - origin.x);
+    double height = MIN((double)texture.height, (double)drawable.texture.height - origin.y);
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+    MTLViewport viewport = {
+        .originX = origin.x,
+        .originY = origin.y,
+        .width = width,
+        .height = height,
+        .znear = 0,
+        .zfar = 1,
+    };
+    simd_float2 texScale = simd_make_float2(width / texture.width, height / texture.height);
+    float whiteLevel = drawable.texture.pixelFormat == MTLPixelFormatBGR10A2Unorm ? kOverlayPqWhite : 1;
+
+    [encoder setRenderPipelineState:_overlayPipeline];
+    [encoder setViewport:viewport];
+    [encoder setVertexBytes:&texScale length:sizeof(texScale) atIndex:0];
+    [encoder setFragmentTexture:texture atIndex:0];
+    [encoder setFragmentBytes:&whiteLevel length:sizeof(whiteLevel) atIndex:0];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+}
+
+
 #pragma mark - V-sync on: CAMetalDisplayLink
 
 - (void)displayLinkThreadMain {
@@ -575,6 +741,21 @@ static NSString *const kVideoShaderSource = @
         Log(LOG_E, @"Failed to create the video pipeline: %@", error);
         return NO;
     }
+
+    // The overlay is premultiplied
+    descriptor.fragmentFunction = [_library newFunctionWithName:@"overlayFragment"];
+    MTLRenderPipelineColorAttachmentDescriptor *color = descriptor.colorAttachments[0];
+    color.blendingEnabled = YES;
+    color.sourceRGBBlendFactor = MTLBlendFactorOne;
+    color.sourceAlphaBlendFactor = MTLBlendFactorOne;
+    color.destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+    color.destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+    _overlayPipeline = [_device newRenderPipelineStateWithDescriptor:descriptor error:&error];
+    if (_overlayPipeline == nil) {
+        Log(LOG_E, @"Failed to create the overlay pipeline: %@", error);
+        _pipeline = nil;
+        return NO;
+    }
     _pipelinePixelFormat = pixelFormat;
     return YES;
 }
@@ -611,8 +792,9 @@ static NSString *const kVideoShaderSource = @
     return pq;
 }
 
-// Draws frame into drawable and presents it
-- (void)renderFrame:(CVPixelBufferRef)frame timing:(const ArtemisFrameTiming *)timing drawable:(id<CAMetalDrawable>)drawable drawableWaitUs:(uint64_t)drawableWaitUs {
+// Draws frame (and the overlay) into drawable and presents it. A NULL timing is a redraw,
+// which isn't recorded in the stats.
+- (void)renderFrame:(CVPixelBufferRef)frame timing:(nullable const ArtemisFrameTiming *)timing drawable:(id<CAMetalDrawable>)drawable drawableWaitUs:(uint64_t)drawableWaitUs {
     OSType pixelFormat = CVPixelBufferGetPixelFormatType(frame);
     BOOL tenBit = pixelFormat == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange ||
                   pixelFormat == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange;
@@ -680,23 +862,26 @@ static NSString *const kVideoShaderSource = @
     [encoder setFragmentTexture:CVMetalTextureGetTexture(chromaRef) atIndex:1];
     [encoder setFragmentBytes:&csc length:sizeof(csc) atIndex:0];
     [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+    [self encodeOverlay:encoder drawable:drawable];
     [encoder endEncoding];
 
     // Measure when the frame actually reached the display. A drawable that never did
     // (replaced by a newer one, or the window is hidden) reports a presentedTime of 0.
-    ArtemisFrameTiming frameTiming = *timing;
-    ArtemisPresentTiming presentTiming = { .drawableWaitUs = drawableWaitUs, .committedTimeUs = [VideoStats nowUs] };
-    VideoStats *stats = _stats;
-    [drawable addPresentedHandler:^(id<MTLDrawable> presented) {
-        ArtemisPresentTiming p = presentTiming;
-        if (commandBuffer.status == MTLCommandBufferStatusCompleted && commandBuffer.GPUEndTime > 0) {
-            p.gpuDoneTimeUs = [VideoStats microsecondsFromMediaTime:commandBuffer.GPUEndTime];
-        }
-        if (presented.presentedTime > 0) {
-            p.presentedTimeUs = [VideoStats microsecondsFromMediaTime:presented.presentedTime];
-        }
-        [stats recordPresentedFrame:&frameTiming present:&p];
-    }];
+    if (timing != NULL) {
+        ArtemisFrameTiming frameTiming = *timing;
+        ArtemisPresentTiming presentTiming = { .drawableWaitUs = drawableWaitUs, .committedTimeUs = [VideoStats nowUs] };
+        VideoStats *stats = _stats;
+        [drawable addPresentedHandler:^(id<MTLDrawable> presented) {
+            ArtemisPresentTiming p = presentTiming;
+            if (commandBuffer.status == MTLCommandBufferStatusCompleted && commandBuffer.GPUEndTime > 0) {
+                p.gpuDoneTimeUs = [VideoStats microsecondsFromMediaTime:commandBuffer.GPUEndTime];
+            }
+            if (presented.presentedTime > 0) {
+                p.presentedTimeUs = [VideoStats microsecondsFromMediaTime:presented.presentedTime];
+            }
+            [stats recordPresentedFrame:&frameTiming present:&p];
+        }];
+    }
 
     // The textures (and the decoded buffer behind them) must outlive the GPU work
     CVPixelBufferRetain(frame);

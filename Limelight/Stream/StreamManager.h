@@ -25,4 +25,7 @@
 // Latency statistics for the running stream (nil until the stream starts)
 @property (atomic, readonly, strong) VideoStats* videoStats;
 
+// Main thread. Text drawn over the video, or nil for none (ignored until the stream starts).
+- (void) setStatsOverlayText:(NSString *)text;
+
 @end

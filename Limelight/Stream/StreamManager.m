@@ -23,6 +23,7 @@
     OSView* _renderView;
     id<ConnectionCallbacks> _callbacks;
     Connection* _connection;
+    VideoDecoderRenderer* _renderer;
 }
 
 - (id) initWithConfig:(StreamConfiguration*)config renderView:(OSView*)view connectionCallbacks:(id<ConnectionCallbacks>)callbacks {
@@ -110,6 +111,7 @@
             return;
         }
         self->_videoStats = renderer.stats;
+        self->_renderer = renderer;
         self->_connection = [[Connection alloc] initWithConfig:self->_config renderer:renderer connectionCallbacks:self->_callbacks];
         NSOperationQueue* opQueue = [[NSOperationQueue alloc] init];
         [opQueue addOperation:self->_connection];
@@ -146,6 +148,11 @@ static NSString *const kLaunchedSessionsKey = @"launchedSessions";
 {
     [_connection terminate];
     _callbacks = nil;
+}
+
+- (void) setStatsOverlayText:(NSString *)text
+{
+    [_renderer setOverlayText:text];
 }
 
 - (BOOL) launchApp:(HttpManager*)hMan receiveSessionUrl:(NSString**)sessionUrl {

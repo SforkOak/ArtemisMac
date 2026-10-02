@@ -37,6 +37,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (void)setHdrMode:(BOOL)enabled;
 
+// Main thread. See MetalVideoPresenter.
+- (void)setOverlayText:(nullable NSString *)text;
+
 @end
 
 NS_ASSUME_NONNULL_END

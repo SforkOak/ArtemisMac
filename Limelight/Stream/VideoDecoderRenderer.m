@@ -120,6 +120,10 @@ static void DecompressionOutputCallback(void *decompressionOutputRefCon,
     [_presenter stop];
 }
 
+- (void)setOverlayText:(NSString *)text {
+    [_presenter setOverlayText:text];
+}
+
 - (void)cleanup {
     atomic_store(&_stopped, true);
     [self destroySession];

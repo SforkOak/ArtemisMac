@@ -39,7 +39,7 @@
 @property (nonatomic, strong) StreamManager *streamMan;
 @property (nonatomic, strong) ApolloSession *apolloSession;
 @property (nonatomic, strong) NSMenuItem *apolloMenuItem;
-@property (nonatomic, strong) NSTextField *statsOverlay;
+@property (nonatomic) BOOL statsOverlayVisible;
 @property (nonatomic, strong) NSTimer *statsTimer;
 @property (nonatomic) NSUInteger statsTicks;
 @property (nonatomic, strong) id<NSObject> streamActivity;
@@ -458,7 +458,7 @@ static NSString *const kShowStatsDefaultsKey = @"showStreamStats";
         return;
     }
     self.statsTicks = 0;
-    [self setStatsOverlayVisible:[NSUserDefaults.standardUserDefaults boolForKey:kShowStatsDefaultsKey]];
+    self.statsOverlayVisible = [NSUserDefaults.standardUserDefaults boolForKey:kShowStatsDefaultsKey];
 
     __weak typeof(self) weakSelf = self;
     self.statsTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *timer) {
@@ -472,28 +472,19 @@ static NSString *const kShowStatsDefaultsKey = @"showStreamStats";
 }
 
 - (IBAction)toggleStatsOverlay:(id)sender {
-    BOOL visible = !(self.statsOverlay != nil && !self.statsOverlay.hidden);
+    BOOL visible = !self.statsOverlayVisible;
     [NSUserDefaults.standardUserDefaults setBool:visible forKey:kShowStatsDefaultsKey];
-    [self setStatsOverlayVisible:visible];
+    self.statsOverlayVisible = visible;
     [self updateStats];
 }
 
+// The video presenter draws the overlay into the video frames. A view on top would hold
+// the next video frames back 1-2 refreshes each time its text changed.
 - (void)setStatsOverlayVisible:(BOOL)visible {
-    if (visible && self.statsOverlay == nil) {
-        NSTextField *overlay = [NSTextField wrappingLabelWithString:@""];
-        overlay.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightMedium];
-        overlay.textColor = NSColor.whiteColor;
-        overlay.drawsBackground = YES;
-        overlay.backgroundColor = [NSColor colorWithWhite:0 alpha:0.6];
-        overlay.translatesAutoresizingMaskIntoConstraints = NO;
-        [self.view addSubview:overlay positioned:NSWindowAbove relativeTo:nil];
-        [NSLayoutConstraint activateConstraints:@[
-            [overlay.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:8],
-            [overlay.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:8],
-        ]];
-        self.statsOverlay = overlay;
+    _statsOverlayVisible = visible;
+    if (!visible) {
+        [self.streamMan setStatsOverlayText:nil];
     }
-    self.statsOverlay.hidden = !visible;
 }
 
 - (void)updateStats {
@@ -525,8 +516,8 @@ static NSString *const kShowStatsDefaultsKey = @"showStreamStats";
         audio.underruns, audio.underrunMs, audio.trimmedPackets, audio.overflowDrops, audio.maxCallbackFrames, audio.maxCallbackGapMs,
         s.framesReceived, s.framesPresented, s.framesLostInNetwork, s.framesDroppedByDecoder, s.framesSuperseded, s.framesNotDisplayed, s.keepAlivePresents];
 
-    if (self.statsOverlay != nil && !self.statsOverlay.hidden) {
-        self.statsOverlay.stringValue = text;
+    if (self.statsOverlayVisible) {
+        [self.streamMan setStatsOverlayText:text];
     }
 
     // Also log every few seconds, so latency can be checked with `log stream`
