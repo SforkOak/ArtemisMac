@@ -145,6 +145,15 @@
         return;
     }
 
+    __weak typeof(self) weakSelf = self;
+    [self resolvePairedHostWithUUID:hostUUID hostName:hostName deadline:[NSDate dateWithTimeIntervalSinceNow:10.0] completion:^(TemporaryHost *host) {
+        [weakSelf openLaunchLinkForHost:host hostName:hostName appUUID:appUUID query:query];
+    }];
+}
+
+// The pair state stays Unknown until the first serverinfo poll finishes, which on a cold start can
+// be after the link arrives. Wait for it (up to the deadline) rather than reporting "unpaired".
+- (void)resolvePairedHostWithUUID:(NSString *)hostUUID hostName:(NSString *)hostName deadline:(NSDate *)deadline completion:(void (^)(TemporaryHost *host))completion {
     TemporaryHost *host = nil;
     for (TemporaryHost *candidate in self.hostList ?: self.hosts) {
         if ([candidate.uuid caseInsensitiveCompare:hostUUID] == NSOrderedSame) {
@@ -152,11 +161,29 @@
             break;
         }
     }
-    if (host == nil || host.pairState != PairStatePaired) {
+    if (host != nil && host.pairState == PairStatePaired) {
+        completion(host);
+        return;
+    }
+    if (host != nil && host.pairState == PairStateUnpaired) {
         [self showDeepLinkError:[NSString stringWithFormat:@"Pair with %@ first, then try the link again.", hostName]];
         return;
     }
+    if ([deadline timeIntervalSinceNow] <= 0) {
+        if (host == nil) {
+            [self showDeepLinkError:[NSString stringWithFormat:@"Pair with %@ first, then try the link again.", hostName]];
+        } else {
+            [self showDeepLinkError:[NSString stringWithFormat:@"Couldn't reach %@. Check that it's on and on the same network, then try the link again.", hostName]];
+        }
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [weakSelf resolvePairedHostWithUUID:hostUUID hostName:hostName deadline:deadline completion:completion];
+    });
+}
 
+- (void)openLaunchLinkForHost:(TemporaryHost *)host hostName:(NSString *)hostName appUUID:(NSString *)appUUID query:(NSDictionary<NSString *, NSString *> *)query {
     for (NSViewController *child in self.parentViewController.childViewControllers) {
         if ([child isKindOfClass:[AppsViewController class]] && child.view.superview != nil) {
             AppsViewController *appsVC = (AppsViewController *)child;
