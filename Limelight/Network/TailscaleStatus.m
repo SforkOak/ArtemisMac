@@ -50,7 +50,8 @@ static NSArray<NSString *> *stringArray(id value) {
 }
 
 - (BOOL)relayed {
-    return self.currentAddress.length == 0 && (self.peerRelay.length > 0 || self.relay.length > 0);
+    // An idle peer has no path yet, relayed or not
+    return self.active && self.currentAddress.length == 0 && (self.peerRelay.length > 0 || self.relay.length > 0);
 }
 
 - (NSString *)pathDescription {

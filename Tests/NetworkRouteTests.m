@@ -63,6 +63,7 @@ static void testStatus(void) {
 
     TailscalePeer *idle = [status peerMatchingHostName:@"living-room" addresses:@[]];
     CHECK([idle.pathDescription isEqualToString:@"idle"], "%s", idle.pathDescription.UTF8String);
+    CHECK(!idle.relayed, "an idle peer isn't relayed");
 
     CHECK([TailscaleStatus statusFromJSON:[@"{\"BackendState\": \"Stopped\"}" dataUsingEncoding:NSUTF8StringEncoding]] == nil, "stopped");
     CHECK([TailscaleStatus statusFromJSON:[@"not json" dataUsingEncoding:NSUTF8StringEncoding]] == nil, "garbage");
