@@ -239,7 +239,12 @@ class SettingsModel: ObservableObject {
         90,
         100,
         120,
-        150
+        150,
+        200,
+        250,
+        300,
+        400,
+        500
     ]
     // New codecs are appended so indices saved in existing profiles keep their meaning
     static var videoCodecs: [String] = ["H.264", "H.265", "AV1", "Automatic"]
@@ -410,7 +415,8 @@ class SettingsModel: ObservableObject {
                     }
                 }
                 
-                var bitrateIndex = 0
+                // A bitrate above the top step shows as the top step rather than the bottom one
+                var bitrateIndex = Self.bitrateSteps.count - 1
                 for i in 0..<Self.bitrateSteps.count {
                     if Float(settings.bitrate) <= Self.bitrateSteps[i] * 1000.0 {
                         bitrateIndex = i
